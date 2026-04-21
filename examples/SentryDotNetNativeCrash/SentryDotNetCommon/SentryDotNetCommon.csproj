@@ -1,0 +1,54 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+		<TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+		<Platforms>x86;x64;ARM64</Platforms>
+		<RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+	</PropertyGroup>
+
+	<ItemGroup Condition="'$(SentryNativeRuntimeDir)' != ''">
+		<Content Include="$(SentryNativeRuntimeDir)\sentry.dll" Condition="Exists('$(SentryNativeRuntimeDir)\sentry.dll')">
+			<Link>sentry.dll</Link>
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+		<Content Include="$(SentryNativeRuntimeDir)\sentry.pdb" Condition="Exists('$(SentryNativeRuntimeDir)\sentry.pdb')">
+			<Link>sentry.pdb</Link>
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+		<Content Include="$(SentryNativeRuntimeDir)\sentry_wer_module.dll" Condition="Exists('$(SentryNativeRuntimeDir)\sentry_wer_module.dll')">
+			<Link>sentry_wer_module.dll</Link>
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+		<Content Include="$(SentryNativeRuntimeDir)\sentry_wer_module.pdb" Condition="Exists('$(SentryNativeRuntimeDir)\sentry_wer_module.pdb')">
+			<Link>sentry_wer_module.pdb</Link>
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
+	</ItemGroup>
+
+	<ItemGroup Condition="'$(SentryNativeRuntimeDir)' == ''">
+		<None Update="sentry.dll" Condition="Exists('$(MSBuildProjectDirectory)\sentry.dll')">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="sentry.pdb" Condition="Exists('$(MSBuildProjectDirectory)\sentry.pdb')">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="sentry_wer_module.dll" Condition="Exists('$(MSBuildProjectDirectory)\sentry_wer_module.dll')">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="sentry_wer_module.pdb" Condition="Exists('$(MSBuildProjectDirectory)\sentry_wer_module.pdb')">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+	</ItemGroup>
+
+	<Target Name="EnsureSentryNativeFilesExist" BeforeTargets="BeforeBuild">
+		<Error Condition="'$(SentryNativeRuntimeDir)' != '' and (!Exists('$(SentryNativeRuntimeDir)\sentry.dll') or !Exists('$(SentryNativeRuntimeDir)\sentry_wer_module.dll'))"
+			   Text="SentryNativeRuntimeDir is set, but sentry.dll or sentry_wer_module.dll is missing from that directory: $(SentryNativeRuntimeDir)" />
+		<Error Condition="'$(SentryNativeRuntimeDir)' == '' and (!Exists('$(MSBuildProjectDirectory)\sentry.dll') or !Exists('$(MSBuildProjectDirectory)\sentry_wer_module.dll'))"
+			   Text="Required Sentry Native binaries are missing. Run examples/SentryDotNetNativeCrash/Prepare-LocalSentryNative.ps1 or set SENTRY_NATIVE_RUNTIME_DIR." />
+	</Target>
+
+</Project>

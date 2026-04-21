@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "SentryWinUI3NativeCrash (Package)": {
+      "commandName": "MsixPackage",
+      "nativeDebugging": true
+    },
+    "SentryWinUI3NativeCrash (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

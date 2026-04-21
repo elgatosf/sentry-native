@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <SentryNativeRepoRoot Condition="'$(SentryNativeRepoRoot)' == ''">$(MSBuildThisFileDirectory)..\..\</SentryNativeRepoRoot>
+    <SentryNativeRuntimeDir Condition="'$(SentryNativeRuntimeDir)' == '' and '$(SENTRY_NATIVE_RUNTIME_DIR)' != ''">$(SENTRY_NATIVE_RUNTIME_DIR)</SentryNativeRuntimeDir>
+    <SentryNativeRuntimeDir Condition="'$(SentryNativeRuntimeDir)' == '' and Exists('$(SentryNativeRepoRoot)build-dotnet-wer\$(Configuration)\sentry.dll')">$(SentryNativeRepoRoot)build-dotnet-wer\$(Configuration)</SentryNativeRuntimeDir>
+    <SentryNativeRuntimeDir Condition="'$(SentryNativeRuntimeDir)' == '' and Exists('$(SentryNativeRepoRoot)build-dotnet-wer\sentry.dll')">$(SentryNativeRepoRoot)build-dotnet-wer</SentryNativeRuntimeDir>
+  </PropertyGroup>
+</Project>
