@@ -271,8 +271,9 @@ def cmake_build(cwd, targets, options):
         from tests.win_utils import check_binary_version
 
         check_binary_version(Path(cwd) / "sentry.dll")
-        check_binary_version(Path(cwd) / "crashpad_wer.dll")
-        check_binary_version(Path(cwd) / "crashpad_handler.exe")
+        if options.get("SENTRY_BACKEND") == "crashpad":
+            check_binary_version(Path(cwd) / "crashpad_wer.dll")
+            check_binary_version(Path(cwd) / "crashpad_handler.exe")
 
     # CodeChecker invocations and options are documented here:
     # https://github.com/Ericsson/codechecker/blob/master/docs/analyzer/user_guide.md

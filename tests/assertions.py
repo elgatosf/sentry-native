@@ -458,6 +458,7 @@ class CrashpadAttachments:
     view_hierarchy: dict
     cmake_cache: int
     bytes_bin: bytes = None
+    stowed_stack: str = None
 
 
 def _unpack_breadcrumbs(payload):
@@ -473,9 +474,16 @@ def _load_crashpad_attachments(msg):
     view_hierarchy = {}
     cmake_cache = -1
     bytes_bin = None
+    stowed_stack = None
     for part in msg.walk():
         if part.get_filename() is not None:
-            assert part.get("Content-Type") is None
+            content_type = part.get("Content-Type")
+            assert content_type in (
+                None,
+                "application/octet-stream",
+                "application/json",
+                "text/plain",
+            )
 
         match part.get_filename():
             case "__sentry-event":
@@ -490,9 +498,19 @@ def _load_crashpad_attachments(msg):
                 cmake_cache = len(part.get_payload(decode=True))
             case "bytes.bin":
                 bytes_bin = part.get_payload(decode=True)
+            case "__sentry-stowed-stack.txt":
+                stowed_stack = part.get_payload(decode=True).decode(
+                    "utf-8", errors="replace"
+                )
 
     return CrashpadAttachments(
-        event, breadcrumb1, breadcrumb2, view_hierarchy, cmake_cache, bytes_bin
+        event,
+        breadcrumb1,
+        breadcrumb2,
+        view_hierarchy,
+        cmake_cache,
+        bytes_bin,
+        stowed_stack,
     )
 
 
@@ -538,6 +556,43 @@ def assert_crashpad_upload(req, expect_attachment=False, expect_view_hierarchy=F
         assert attachments.bytes_bin == None
     if expect_view_hierarchy:
         assert_attachment_content_view_hierarchy(attachments.view_hierarchy)
+    assert any(
+        b'name="upload_file_minidump"' in part.as_bytes()
+        and b"\n\nMDMP" in part.as_bytes()
+        for part in msg.walk()
+    )
+    return attachments
+
+
+def assert_wer_upload(
+    req,
+    expect_attachment=False,
+    expect_view_hierarchy=False,
+    expect_stowed_stack=False,
+):
+    msg = email.message_from_bytes(
+        bytes(str(req.headers), encoding="utf8") + req.get_data()
+    )
+    attachments = _load_crashpad_attachments(msg)
+
+    assert_overflowing_breadcrumb(attachments)
+    assert_event_meta(attachments.event, integration="wer")
+    if expect_attachment:
+        assert attachments.cmake_cache > 0
+        assert attachments.bytes_bin == b"\xc0\xff\xee"
+    else:
+        assert attachments.cmake_cache == -1
+        assert attachments.bytes_bin is None
+    if expect_view_hierarchy:
+        assert_attachment_content_view_hierarchy(attachments.view_hierarchy)
+    else:
+        assert attachments.view_hierarchy == {}
+    if expect_stowed_stack:
+        assert attachments.stowed_stack is not None
+        assert "#00 " in attachments.stowed_stack
+        assert "#-- end --" in attachments.stowed_stack
+    else:
+        assert attachments.stowed_stack is None
     assert any(
         b'name="upload_file_minidump"' in part.as_bytes()
         and b"\n\nMDMP" in part.as_bytes()
