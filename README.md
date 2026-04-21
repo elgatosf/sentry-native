@@ -21,6 +21,12 @@ and later.
 
 Using the `sentry-native` SDK in a standalone use case is currently an experimental feature. The SDK’s primary function is to fuel our other SDKs, like [`sentry-java`](https://github.com/getsentry/sentry-java) or [`sentry-unreal`](https://github.com/getsentry/sentry-unreal). Support from our side is best effort and we do what we can to respond to issues in a timely fashion, but please understand if we won’t be able to address your issues or feature suggestions.
 
+## Windows WER Backend Status
+
+A dedicated WER backend for Windows is being prepared for upstream `sentry-native`, primarily to improve crash capture for WinUI 3 and CoreCLR scenarios where the usual application-local crash path can miss native or fast-fail crashes.
+
+See [docs/windows-wer-backend.md](./docs/windows-wer-backend.md) for the current status, first-merge scope, known limitations, missing features, and recommended follow-up work.
+
 ## Resources <!-- omit in toc -->
 
 - [SDK Documentation](https://docs.sentry.io/platforms/native/)
@@ -29,14 +35,17 @@ Using the `sentry-native` SDK in a standalone use case is currently an experimen
 
 ## Table of Contents <!-- omit in toc -->
 
+- [Windows WER Backend Status](#windows-wer-backend-status)
 - [Downloads](#downloads)
   - [What is Inside](#what-is-inside)
 - [Platform and Feature Support](#platform-and-feature-support)
 - [Building and Installation](#building-and-installation)
   - [Compile-Time Options](#compile-time-options)
+  - [Support Matrix](#support-matrix)
   - [Build Targets](#build-targets)
 - [Runtime Configuration](#runtime-configuration)
 - [Known Limitations](#known-limitations)
+- [Benchmarks](#benchmarks)
 - [Development](#development)
 
 ## Downloads
@@ -184,8 +193,8 @@ specifying the `SDKROOT`:
 $ export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
 ```
 
-If you build on macOS using _CMake 4_, then you _must_ specify the `SDKROOT`, because 
-[CMake 4 defaults to an empty `CMAKE_OSX_SYSROOT`](https://cmake.org/cmake/help/latest/variable/CMAKE_OSX_SYSROOT.html), 
+If you build on macOS using _CMake 4_, then you _must_ specify the `SDKROOT`, because
+[CMake 4 defaults to an empty `CMAKE_OSX_SYSROOT`](https://cmake.org/cmake/help/latest/variable/CMAKE_OSX_SYSROOT.html),
 which could lead to inconsistent include paths when CMake tries to gather the `sysroot` later in the build.
 
 ### Compile-Time Options
@@ -246,6 +255,11 @@ using `cmake -D BUILD_SHARED_LIBS=OFF ..`.
     only supported on Desktop OSs.
   - **inproc**: A small in-process handler that is supported on all platforms,
     and is used as a default on Android.
+  - **wer**: **(Experimental, Windows only)** This uses a Windows Error Reporting
+    runtime exception module to capture crash types that can bypass the usual
+    application-local crash path. It is primarily intended for WinUI 3, CoreCLR,
+    and related Windows crash scenarios. See [docs/windows-wer-backend.md](./docs/windows-wer-backend.md)
+    for current scope and limitations.
   - **native**: **(Experimental)** An out-of-process crash handler that uses a
     lightweight daemon to monitor the application, generate minidumps, and send
     crash reports. Supports Linux, macOS, and Windows. Compatible with TSAN and
@@ -304,7 +318,7 @@ using `cmake -D BUILD_SHARED_LIBS=OFF ..`.
 ### Support Matrix
 
 | Feature    | Windows | macOS | Linux | Android | iOS  |
-|------------|---------|-------|-------|---------|------|
+| ---------- | ------- | ----- | ----- | ------- | ---- |
 | Transports |         |       |       |         |      |
 | - curl     |         | ☑     | ☑     | (✓)**   |      |
 | - winhttp  | ☑       |       |       |         |      |
@@ -314,6 +328,7 @@ using `cmake -D BUILD_SHARED_LIBS=OFF ..`.
 | - crashpad | ☑       | ☑     | ☑     |         |      |
 | - breakpad | ✓       | ✓     | ✓     | (✓)*    | (✓)* |
 | - inproc   | ✓       | ✓     | ✓     | ☑       |      |
+| - wer      | ✓       |       |       |         |      |
 | - none     | ✓       | ✓     | ✓     | ✓       |      |
 
 Legend:
@@ -332,6 +347,9 @@ In addition to platform support, the "Advanced Usage" section of the SDK docs no
 - `crashpad_handler`: When configured with the `crashpad` backend, this is
   the out-of-process crash handler, which will need to be installed along with
   the project's executable.
+- `sentry_wer_module`: When configured with the experimental `wer` backend, this is
+  the Windows Error Reporting runtime exception module that must be installed
+  alongside the application or placed in the location referenced by `handler_path`.
 - `sentry_test_unit`: These are the main unit-tests, which are conveniently built
   also by the toplevel makefile.
 - `sentry_example`: This is a small example program highlighting the API, which
@@ -356,7 +374,7 @@ Other important configuration options include:
 
 - `sentry_options_set_database_path`: Sentry needs to persist some cache data across application restarts, especially for proper handling of release health sessions. It is recommended to set an explicit absolute path corresponding to the application's cache directory (equivalent to `AppData/Local` on Windows, and `XDG_CACHE_HOME` on Linux). Sentry should be given its own directory, not shared with other application data, because the SDK will enumerate and possibly delete files in that directory. An example might be `$XDG_CACHE_HOME/your-app/sentry`.
   When not explicitly set, Sentry will create and use the `.sentry-native` directory in the current working directory.
-- `sentry_options_set_handler_path`: When using the crashpad backend, Sentry will look for a `crashpad_handler` executable in the same directory as the running executable. It is recommended to set this as an explicit absolute path based on the application's install location.
+- `sentry_options_set_handler_path`: When using the crashpad backend, Sentry will look for a `crashpad_handler` executable in the same directory as the running executable. When using the experimental `wer` backend, this can point either to `sentry_wer_module.dll` directly or to a directory containing that DLL. It is recommended to set this as an explicit absolute path based on the application's install location.
 - `sentry_options_set_release`: Some features in Sentry, including release health, need to have a release version set. This corresponds to the application’s version and needs to be set explicitly. See [Releases](https://docs.sentry.io/product/releases/) for more information.
 
 ## Known Limitations
@@ -371,6 +389,8 @@ Other important configuration options include:
   But since this process bypasses SEH, the application's local exception handler is no longer invoked, which
   also means that for these kinds of crashes, `before_send` and `on_crash` will not be invoked before
   sending the minidump, and thus have no effect.
+- Work on a dedicated Windows WER backend is tracked in [docs/windows-wer-backend.md](./docs/windows-wer-backend.md).
+  That document keeps the current limitations and missing features explicit so they can be addressed in follow-up work instead of being rediscovered during implementation.
 - When using the crashpad backend on macOS, the list of attachments that will be sent
   along with crashes is frozen at the time of `sentry_init`.
 
