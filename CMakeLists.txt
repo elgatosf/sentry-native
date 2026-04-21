@@ -223,7 +223,7 @@ endif()
 
 if(NOT DEFINED SENTRY_BACKEND)
 	set(SENTRY_BACKEND ${SENTRY_DEFAULT_BACKEND} CACHE STRING
-		"The sentry backend responsible for reporting crashes, can be either 'none', 'inproc', 'breakpad', 'crashpad', or 'native'.")
+		"The sentry backend responsible for reporting crashes, can be either 'none', 'inproc', 'breakpad', 'crashpad', 'native', or 'wer'.")
 endif()
 
 if(SENTRY_BACKEND STREQUAL "crashpad")
@@ -232,6 +232,13 @@ elseif(SENTRY_BACKEND STREQUAL "inproc")
 	set(SENTRY_BACKEND_INPROC TRUE)
 elseif(SENTRY_BACKEND STREQUAL "breakpad")
 	set(SENTRY_BACKEND_BREAKPAD TRUE)
+elseif(SENTRY_BACKEND STREQUAL "wer")
+	if(NOT WIN32)
+		message(FATAL_ERROR "The 'wer' backend is only supported on Windows.")
+	endif()
+	message(WARNING "The 'wer' backend is experimental and under active development. "
+		"It is primarily intended for Windows crash scenarios that bypass the usual application-local handler path.")
+	set(SENTRY_BACKEND_WER TRUE)
 elseif(SENTRY_BACKEND STREQUAL "native")
 	message(WARNING "The 'native' backend is experimental and under active development. "
 		"It may have incomplete features or unexpected behavior.")
@@ -243,7 +250,7 @@ elseif(SENTRY_BACKEND STREQUAL "custom")
 		"SENTRY_BACKEND set to 'custom' - a custom backend source must be added to the compilation unit by the downstream SDK.")
 else()
 	message(FATAL_ERROR
-		"SENTRY_BACKEND must be one of 'crashpad', 'inproc', 'breakpad', 'native', or 'none'.
+		"SENTRY_BACKEND must be one of 'crashpad', 'inproc', 'breakpad', 'native', 'wer', or 'none'.
 		Downstream SDKs may choose to provide their own by specifying 'custom'.")
 endif()
 
@@ -586,6 +593,9 @@ elseif(WIN32)
 		set(_SENTRY_PLATFORM_LIBS "version")
 	else()
 		set(_SENTRY_PLATFORM_LIBS "dbghelp" "shlwapi" "version")
+		if(SENTRY_BACKEND_WER)
+			list(APPEND _SENTRY_PLATFORM_LIBS "advapi32")
+		endif()
 	endif()
 	# WaitOnAddress/WakeByAddressSingle require Windows 8+
 	# (Synchronization.lib). Older targets fall back to sleep-poll.
@@ -716,6 +726,41 @@ if(SENTRY_BACKEND_CRASHPAD)
 			DESTINATION "${CMAKE_INSTALL_BINDIR}" OPTIONAL)
 	endif()
 	add_dependencies(sentry crashpad::handler)
+elseif(SENTRY_BACKEND_WER)
+	add_library(sentry_wer_module SHARED
+		src/wer/sentry_wer_module.cpp
+		src/wer/sentry_wer_stowed.cpp
+		src/wer/sentry_wer_winhttp.c
+		src/sentry_alloc.c
+		src/sentry_string.c
+	)
+
+	target_compile_definitions(sentry_wer_module PRIVATE SENTRY_BUILD_STATIC)
+	target_include_directories(sentry_wer_module PRIVATE
+		"$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+		"$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src>"
+	)
+	target_link_libraries(sentry_wer_module PRIVATE dbghelp winhttp)
+
+	if(SENTRY_BUILD_RUNTIMESTATIC AND MSVC)
+		set_property(TARGET sentry_wer_module PROPERTY MSVC_RUNTIME_LIBRARY
+			"MultiThreaded$<$<CONFIG:Debug>:Debug>")
+	endif()
+
+	if(DEFINED SENTRY_FOLDER)
+		set_target_properties(sentry_wer_module PROPERTIES FOLDER ${SENTRY_FOLDER})
+	endif()
+
+	sentry_install(TARGETS sentry_wer_module
+		RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+		LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+		ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+	)
+
+	if(WIN32 AND MSVC)
+		sentry_install(FILES $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:$<TARGET_PDB_FILE:sentry_wer_module>>
+			DESTINATION "${CMAKE_INSTALL_BINDIR}" OPTIONAL)
+	endif()
 elseif(SENTRY_BACKEND_BREAKPAD)
 	option(SENTRY_BREAKPAD_SYSTEM "Use system breakpad" OFF)
 	if(SENTRY_BREAKPAD_SYSTEM)
@@ -943,6 +988,11 @@ if(SENTRY_BUILD_EXAMPLES)
 
 	add_custom_command(TARGET sentry_example POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/view-hierarchy.json" "${SENTRY_FIXTURE_OUTPUT_DIR}/view-hierarchy.json")
+
+	if(SENTRY_BACKEND_WER AND WIN32)
+		add_custom_command(TARGET sentry_example POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:sentry_wer_module>" "${SENTRY_FIXTURE_OUTPUT_DIR}/")
+	endif()
 endif()
 
 # Limit the exported symbols when sentry is built as a shared library to those with a "sentry_" prefix:

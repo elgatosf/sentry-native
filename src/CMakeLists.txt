@@ -208,6 +208,11 @@ elseif(SENTRY_BACKEND_NATIVE)
 
 	# Enable C11 for atomics support
 	set_property(TARGET sentry PROPERTY C_STANDARD 11)
+elseif(SENTRY_BACKEND_WER)
+	target_compile_definitions(sentry PRIVATE SENTRY_BACKEND_WER)
+	sentry_target_sources_cwd(sentry
+		backends/sentry_backend_wer.cpp
+	)
 elseif(SENTRY_BACKEND_NONE)
 	sentry_target_sources_cwd(sentry
 		backends/sentry_backend_none.c
