@@ -17,6 +17,8 @@
 
 #ifdef SENTRY_BACKEND_CRASHPAD
 #    define SENTRY_BACKEND "crashpad"
+#elif defined(SENTRY_BACKEND_WER)
+#    define SENTRY_BACKEND "wer"
 #elif defined(SENTRY_BACKEND_BREAKPAD)
 #    define SENTRY_BACKEND "breakpad"
 #elif defined(SENTRY_BACKEND_INPROC)

@@ -38,6 +38,15 @@ get_current_thread_id()
 {
     return GetCurrentThreadId();
 }
+
+static void
+prepare_windows_wer_crash(void)
+{
+    // Some parents, including Python-based test runners, can propagate an
+    // error mode that suppresses WerFault. Preserve the non-dialog flags while
+    // clearing any inherited crash-dialog suppression bits.
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+}
 #elif defined(SENTRY_PLATFORM_MACOS)
 #    include <pthread.h>
 #    include <stdint.h>
@@ -1013,9 +1022,11 @@ main(int argc, char **argv)
 #if defined(SENTRY_PLATFORM_WINDOWS) && !defined(__MINGW32__)                  \
     && !defined(__MINGW64__)
     if (has_arg(argc, argv, "fastfail")) {
+        prepare_windows_wer_crash();
         trigger_fastfail_crash();
     }
     if (has_arg(argc, argv, "stack-buffer-overrun")) {
+        prepare_windows_wer_crash();
         trigger_stack_buffer_overrun();
     }
 #endif

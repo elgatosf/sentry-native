@@ -19,6 +19,7 @@ list(FILTER SENTRY_SOURCES EXCLUDE REGEX "\\.rc$")
 
 add_executable(sentry_test_unit
 	${SENTRY_SOURCES}
+	${PROJECT_SOURCE_DIR}/src/wer/sentry_wer_stowed.cpp
 	main.c
 	sentry_testsupport.h
 	test_attachments.c
@@ -59,6 +60,7 @@ add_executable(sentry_test_unit
 	test_utils.c
 	test_uuid.c
 	test_value.c
+	test_wer_stowed.cpp
 	tests.inc
 )
 

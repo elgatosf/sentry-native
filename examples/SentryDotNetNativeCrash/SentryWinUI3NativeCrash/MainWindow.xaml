@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="SentryWinUI3NativeCrash.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:SentryWinUI3NativeCrash"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="SentryWinUI3NativeCrash">
+
+    <Window.SystemBackdrop>
+        <MicaBackdrop/>
+    </Window.SystemBackdrop>
+
+    <Grid>
+        <StackPanel HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Spacing="10">
+            <TextBlock Text="Sentry WinUI3 Native Crash Test"
+                       FontSize="24"
+                       FontWeight="Bold"
+                       HorizontalAlignment="Center"/>
+
+            <TextBlock Text="Select crash type to test exceptions:"
+                       HorizontalAlignment="Center"
+                       Margin="0,0,0,20"/>
+
+            <Button x:Name="WrongThreadButton"
+                    Content="Stowed Exception - Access UI element on non-UI thread"
+                    HorizontalAlignment="Stretch"
+                    Click="WrongThreadButton_Click"/>
+
+            <Button x:Name="InvalidPathButton"
+                    Content="Stowed Exception - Unhandled exception in DispatcherQueue async delegate"
+                    HorizontalAlignment="Stretch"
+                    Click="InvalidPathButton_Click"/>
+
+            <Button x:Name="FailFastButton"
+                    Content="FailFast"
+                    HorizontalAlignment="Stretch"
+                    Background="Red"
+                    Foreground="White"
+                    Click="FailFastButton_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>
