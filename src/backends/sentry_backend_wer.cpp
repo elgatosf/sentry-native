@@ -491,23 +491,12 @@ wer_backend_flush_scope_to_event(const sentry_path_t *event_path,
     }
 }
 
+// Core flush work: write the staged event and attachment-metadata files. Must
+// only be called with exclusive access (either via the CAS guard below or from
+// the crash handler where concurrency no longer matters).
 static void
-wer_backend_flush_scope(
-    sentry_backend_t *backend, const sentry_options_t *options)
+wer_backend_do_flush_scope(wer_state_t *state, const sentry_options_t *options)
 {
-    auto *state = static_cast<wer_state_t *>(backend->data);
-    if (!state || !state->event_path) {
-        return;
-    }
-
-    // CAS from false→true; if another flush is already running (concurrent
-    // breadcrumb callback), bail out rather than writing a partial scope.
-    bool expected = false;
-    if (!state->scope_flush.compare_exchange_strong(expected, true,
-            std::memory_order_acquire, std::memory_order_relaxed)) {
-        return;
-    }
-
     sentry_value_t event
         = sentry__value_new_event_with_id(&state->crash_event_id);
     sentry_value_set_by_key(
@@ -518,6 +507,28 @@ wer_backend_flush_scope(
         wer_backend_sync_attachments(
             state->attachments_path, scope->attachments);
     }
+}
+
+static void
+wer_backend_flush_scope(
+    sentry_backend_t *backend, const sentry_options_t *options)
+{
+    auto *state = static_cast<wer_state_t *>(backend->data);
+    if (!state || !state->event_path) {
+        return;
+    }
+
+    // CAS from false→true; if another flush is already running (concurrent
+    // breadcrumb callback or scope update), skip — the concurrent flush will
+    // persist an equally up-to-date view.  The crash handler bypasses this
+    // guard by calling wer_backend_do_flush_scope directly.
+    bool expected = false;
+    if (!state->scope_flush.compare_exchange_strong(expected, true,
+            std::memory_order_acquire, std::memory_order_relaxed)) {
+        return;
+    }
+
+    wer_backend_do_flush_scope(state, options);
 
     state->scope_flush.store(false, std::memory_order_release);
 }
@@ -1091,7 +1102,12 @@ wer_backend_except(sentry_backend_t *backend, const sentry_ucontext_t *ctx)
             return;
         }
 
-        wer_backend_flush_scope(backend, options);
+        // Bypass the CAS guard so the crash-time flush always wins even if a
+        // concurrent scope flush (e.g. from a breadcrumb add) is in flight.
+        auto *state_early = static_cast<wer_state_t *>(backend->data);
+        if (state_early && state_early->event_path) {
+            wer_backend_do_flush_scope(state_early, options);
+        }
         sentry__write_crash_marker(options);
 
         if (options->enable_logs) {
