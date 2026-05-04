@@ -11,6 +11,7 @@ extern "C" {
 }
 
 #include <array>
+#include <cstring>
 #include <dbghelp.h>
 #include <new>
 #include <stdarg.h>
@@ -30,6 +31,7 @@ extern "C" {
 struct sentry_wer_state {
     std::wstring run_path;
     std::wstring database_path;
+    std::string stowed_fingerprint;
 };
 
 struct wer_attachment_entry {
@@ -185,6 +187,164 @@ read_file(const wchar_t *path, BYTE **data, DWORD *len)
     CloseHandle(h);
     *data = buf;
     *len = bytes_read;
+    return true;
+}
+
+static bool
+write_file(const wchar_t *path, const BYTE *data, DWORD len)
+{
+    if (!path || !data || !len) {
+        return false;
+    }
+
+    std::wstring file_path = sentry_wer_to_extended_path(path);
+    if (file_path.empty()) {
+        return false;
+    }
+
+    HANDLE h = CreateFileW(file_path.c_str(), GENERIC_WRITE, 0, nullptr,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    DWORD written = 0;
+    bool ok = WriteFile(h, data, len, &written, nullptr) && written == len;
+    CloseHandle(h);
+    return ok;
+}
+
+static bool
+buffer_contains_ascii(const BYTE *data, DWORD len, const char *needle)
+{
+    if (!data || !needle || !needle[0]) {
+        return false;
+    }
+
+    size_t needle_len = strlen(needle);
+    if (!needle_len || needle_len > len) {
+        return false;
+    }
+
+    for (DWORD i = 0; i <= len - needle_len; ++i) {
+        if (memcmp(data + i, needle, needle_len) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void
+append_msgpack_string(std::vector<BYTE> *buffer, const char *value)
+{
+    size_t len = value ? strlen(value) : 0;
+    if (len <= 31) {
+        buffer->push_back((BYTE)(0xA0 | len));
+    } else if (len <= 0xFF) {
+        buffer->push_back(0xD9);
+        buffer->push_back((BYTE)len);
+    } else {
+        buffer->push_back(0xDA);
+        buffer->push_back((BYTE)((len >> 8) & 0xFF));
+        buffer->push_back((BYTE)(len & 0xFF));
+    }
+    buffer->insert(buffer->end(), value, value + len);
+}
+
+static bool
+read_msgpack_map_header(
+    const BYTE *data, DWORD len, DWORD *count, DWORD *header_len)
+{
+    if (!data || !len || !count || !header_len) {
+        return false;
+    }
+
+    BYTE marker = data[0];
+    if ((marker & 0xF0) == 0x80) {
+        *count = marker & 0x0F;
+        *header_len = 1;
+        return true;
+    }
+    if (marker == 0xDE && len >= 3) {
+        *count = ((DWORD)data[1] << 8) | data[2];
+        *header_len = 3;
+        return true;
+    }
+    if (marker == 0xDF && len >= 5) {
+        *count = ((DWORD)data[1] << 24) | ((DWORD)data[2] << 16)
+            | ((DWORD)data[3] << 8) | data[4];
+        *header_len = 5;
+        return true;
+    }
+    return false;
+}
+
+static void
+append_msgpack_map_header(std::vector<BYTE> *buffer, DWORD count)
+{
+    if (count <= 15) {
+        buffer->push_back((BYTE)(0x80 | count));
+    } else if (count <= 0xFFFF) {
+        buffer->push_back(0xDE);
+        buffer->push_back((BYTE)((count >> 8) & 0xFF));
+        buffer->push_back((BYTE)(count & 0xFF));
+    } else {
+        buffer->push_back(0xDF);
+        buffer->push_back((BYTE)((count >> 24) & 0xFF));
+        buffer->push_back((BYTE)((count >> 16) & 0xFF));
+        buffer->push_back((BYTE)((count >> 8) & 0xFF));
+        buffer->push_back((BYTE)(count & 0xFF));
+    }
+}
+
+static bool
+patch_event_msgpack_with_stowed_fingerprint(
+    BYTE **data, DWORD *len, const std::string &fingerprint)
+{
+    if (!data || !*data || !len || !*len || fingerprint.empty()) {
+        return false;
+    }
+    if (buffer_contains_ascii(*data, *len, "fingerprint")) {
+        return false;
+    }
+
+    DWORD map_count = 0;
+    DWORD header_len = 0;
+    if (!read_msgpack_map_header(*data, *len, &map_count, &header_len)
+        || map_count == 0xFFFFFFFF) {
+        return false;
+    }
+
+    std::vector<BYTE> prefix;
+    append_msgpack_map_header(&prefix, map_count + 1);
+
+    std::vector<BYTE> suffix;
+    append_msgpack_string(&suffix, "fingerprint");
+    suffix.push_back(0x93);
+    append_msgpack_string(&suffix, "{{ default }}");
+    append_msgpack_string(&suffix, "winrt-stowed");
+    append_msgpack_string(&suffix, fingerprint.c_str());
+
+    size_t new_len = prefix.size() + (*len - header_len) + suffix.size();
+    if (new_len > MAXDWORD) {
+        return false;
+    }
+
+    BYTE *patched = (BYTE *)HeapAlloc(GetProcessHeap(), 0, new_len);
+    if (!patched) {
+        return false;
+    }
+
+    BYTE *cursor = patched;
+    memcpy(cursor, prefix.data(), prefix.size());
+    cursor += prefix.size();
+    memcpy(cursor, *data + header_len, *len - header_len);
+    cursor += *len - header_len;
+    memcpy(cursor, suffix.data(), suffix.size());
+
+    HeapFree(GetProcessHeap(), 0, *data);
+    *data = patched;
+    *len = (DWORD)new_len;
     return true;
 }
 
@@ -418,8 +578,11 @@ write_minidump(
         stack_path_ptr = stack_path.c_str();
     }
 
-    size_t range_count = sentry_stowed_collect_memory_ranges(
-        log_line, info, ranges.data(), ranges.size(), stack_path_ptr);
+    char stowed_fingerprint[256] = { };
+    size_t range_count = sentry_stowed_collect_memory_ranges(log_line, info,
+        ranges.data(), ranges.size(), stack_path_ptr, stowed_fingerprint,
+        sizeof(stowed_fingerprint));
+    g_state.stowed_fingerprint = stowed_fingerprint;
     sentry_minidump_callback_ctx cb_ctx = { };
     MINIDUMP_CALLBACK_INFORMATION cb_info = { };
     PMINIDUMP_CALLBACK_INFORMATION cb_info_ptr = nullptr;
@@ -545,6 +708,11 @@ upload_dump(
         && read_file(
             stowed_stack_path.c_str(), &stowed_stack_data, &stowed_stack_len)
         && stowed_stack_len;
+    if (have_event
+        && patch_event_msgpack_with_stowed_fingerprint(
+            &event_data, &event_len, g_state.stowed_fingerprint)) {
+        write_file(event_path.c_str(), event_data, event_len);
+    }
     std::vector<wer_attachment_entry> attachments = read_attachment_entries();
 
     char boundary[64];

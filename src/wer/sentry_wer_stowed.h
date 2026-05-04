@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -23,12 +24,16 @@ constexpr SIZE_T SENTRY_WER_STOWED_COPY_LIMIT
 constexpr SIZE_T SENTRY_WER_EXCEPTION_ADDR_LIMIT
     = 512; // enough for the HRESULT+context at the exception address
 constexpr SIZE_T SENTRY_WER_ERROR_TEXT_LIMIT = 32 * 1024;
+constexpr SIZE_T SENTRY_WER_NESTED_PREVIEW_LIMIT = 256;
+constexpr size_t SENTRY_WER_STOWED_MAX_NESTING_DEPTH = 3;
 // 'SE01' / 'SE02' — the two known signature values that identify a valid
 // stowed-exception blob.
 constexpr ULONG SENTRY_WER_STOWED_SIGNATURE_V1 = 'SE01';
 constexpr ULONG SENTRY_WER_STOWED_SIGNATURE_V2 = 'SE02';
 constexpr DWORD SENTRY_WER_STOWED_FORM_BINARY = 0x1;
 constexpr DWORD SENTRY_WER_STOWED_FORM_TEXT = 0x2;
+constexpr ULONG SENTRY_WER_NESTED_TYPE_LEO1 = 0x314F454C;
+constexpr ULONG SENTRY_WER_NESTED_TYPE_XAML = 0x4C4D4158;
 
 #ifndef STATUS_STOWED_EXCEPTION
 #    define STATUS_STOWED_EXCEPTION ((DWORD)0xC000027B)
@@ -165,4 +170,5 @@ bool sentry_stowed_add_pointer_range_if_valid(HANDLE process, ULONG_PTR address,
 size_t sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn,
     const PWER_RUNTIME_EXCEPTION_INFORMATION info,
     sentry_minidump_memory_range *ranges, size_t max_ranges,
-    const wchar_t *stack_text_path);
+    const wchar_t *stack_text_path, char *fingerprint = nullptr,
+    size_t fingerprint_len = 0);

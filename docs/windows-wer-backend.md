@@ -52,7 +52,7 @@ For packaged WinUI 3 apps, two registry/filesystem virtualization issues require
 
 ### 5. Stowed exceptions
 
-WinUI / WinRT failures surface as stowed exceptions (`0xC000027B`). Crashpad does not handle these. The WER backend preserves the stowed-exception stack in the dump, and as a text sidecar attachment.
+WinUI / WinRT failures surface as stowed exceptions (`0xC000027B`). Crashpad does not handle these. The WER backend preserves the first two stowed exceptions, their nested stowed data, and stack-memory ranges in the dump, writes a compact text sidecar attachment, and applies a stowed-derived event fingerprint so different stowed failures do not all collapse into the WinUI fail-fast frame.
 
 ### Summary: patching `crashpad_wer.dll` vs. a dedicated backend
 
@@ -85,7 +85,7 @@ The intended setup: `sentry-dotnet` for managed telemetry, `sentry-native --back
 | `before_send`, `on_crash`, `before_screenshot` hooks | Not invoked               | Module runs in `WerFault.exe`, not the crashing app                 | Needs explicit bridge design; out of scope for first merge                                      |
 | Breadcrumb / scope freshness                         | Staged state only         | WER module can only read what was persisted before the crash        | File-backed staging; shared memory is potential future work                                     |
 | Attachments                                          | Must be explicitly staged | In-process state not available after crash                          | Explicit staging + integration tests                                                            |
-| Stowed exceptions                                    | Text sidecar attachment   | No server-side stowed payload processing yet                        | Drop sidecar once server-side support exists                                                    |
+| Stowed exceptions                                    | Text sidecar attachment + fingerprint | No server-side stowed payload processing yet                        | Drop sidecar once server-side support exists                                                    |
 | Consent, proxy, retry parity                         | Partial                   | Fork duplicates some WinHTTP transport behavior                     | Refactor onto shared upstream transport layer                                                   |
 | Server-side .NET symbolication                       | Out of scope              | WER improves dump creation; does not fix server-side PDB resolution | Track in [getsentry/sentry-dotnet#2076](https://github.com/getsentry/sentry-dotnet/issues/2076) |
 
