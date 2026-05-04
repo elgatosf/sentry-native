@@ -1069,6 +1069,13 @@ wer_backend_except(sentry_backend_t *backend, const sentry_ucontext_t *ctx)
     // (e.g. via SetUnhandledExceptionFilter). It does NOT run inside the WER
     // module. For crashes that only WER can catch (CoreCLR-intercepted AV,
     // stowed exceptions), only the WER module path executes.
+    //
+    // For all other crashes both this handler AND the WER module run (WER fires
+    // after we return EXCEPTION_CONTINUE_SEARCH).  To prevent a duplicate
+    // event we zero the minidump_url in the shared runtime context so the WER
+    // module sees no upload URL and skips its own submission.  The WER module
+    // still writes a minidump to disk (useful for local post-mortem analysis)
+    // but will not attempt an upload.
     SENTRY_WITH_OPTIONS (options) {
         if (!options) {
             return;
@@ -1084,7 +1091,22 @@ wer_backend_except(sentry_backend_t *backend, const sentry_ucontext_t *ctx)
             sentry__metrics_flush_crash_safe();
         }
 
-        sentry_value_t event = sentry_value_new_event();
+        // Suppress the WER module's independent upload now that we are
+        // handling the event in-process.  This write is visible to
+        // WerFault.exe via ReadProcessMemory because runtime_ctx is backed by
+        // a VirtualAlloc'd page.
+        auto *state = static_cast<wer_state_t *>(backend->data);
+        if (state && state->runtime_ctx) {
+            state->runtime_ctx->minidump_url[0] = L'\0';
+        }
+
+        // Reuse the stable crash_event_id that was written into the staged
+        // __sentry-event file by wer_backend_flush_scope so that both code
+        // paths (this one and any future WER module upload) share the same
+        // event identifier.
+        sentry_value_t event = state
+            ? sentry__value_new_event_with_id(&state->crash_event_id)
+            : sentry_value_new_event();
         sentry_value_set_by_key(
             event, "level", sentry__value_new_level(SENTRY_LEVEL_FATAL));
 
