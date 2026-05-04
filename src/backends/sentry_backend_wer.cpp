@@ -1094,6 +1094,10 @@ wer_backend_remove_attachment(
 static void
 wer_backend_user_consent_changed(sentry_backend_t *backend)
 {
+    // Intentionally empty.  sentry_user_consent_give/revoke writes the
+    // "user-consent" file to disk *before* calling this hook, so the WER
+    // module (which reads that file via has_user_consent() at crash time)
+    // already sees the updated consent state.  No additional action is needed.
     (void)backend;
 }
 
