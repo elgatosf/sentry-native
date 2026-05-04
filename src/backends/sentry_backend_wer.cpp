@@ -31,6 +31,7 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <mutex>
 #include <new>
 #include <string>
 #include <vector>
@@ -47,6 +48,10 @@ struct wer_state_t {
     sentry_path_t *attachments_path = nullptr;
     sentry_path_t *last_crash_path = nullptr;
     size_t num_breadcrumbs = 0;
+    // Serialises concurrent wer_backend_add_breadcrumb calls. Guards both the
+    // num_breadcrumbs counter and the file writes so that the rotation boundary
+    // (first_breadcrumb) and the actual write are always atomically paired.
+    std::mutex breadcrumb_mutex;
     // Prevents concurrent scope flushes (e.g. breadcrumb add racing with
     // except).
     std::atomic<bool> scope_flush { false };
@@ -526,6 +531,11 @@ wer_backend_add_breadcrumb(sentry_backend_t *backend, sentry_value_t breadcrumb,
     if (!max_breadcrumbs) {
         return;
     }
+
+    // Serialise so that the rotation decision (first_breadcrumb / which file)
+    // and the subsequent write are always atomic with respect to concurrent
+    // calls from multiple threads.
+    std::lock_guard<std::mutex> lk(state->breadcrumb_mutex);
 
     // Breadcrumbs are written to two alternating files
     // (breadcrumb1/breadcrumb2), each holding up to max_breadcrumbs entries.
