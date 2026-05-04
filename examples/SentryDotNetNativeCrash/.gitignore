@@ -10,9 +10,6 @@
 *.userosscache
 *.sln.docstates
 
-# Local launch profiles contain environment variables (e.g. SENTRY_DSN) and must not be committed
-**/Properties/launchSettings.json
-
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
 
