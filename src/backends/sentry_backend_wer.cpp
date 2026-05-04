@@ -1068,12 +1068,26 @@ static void
 wer_backend_remove_attachment(
     sentry_backend_t *backend, sentry_attachment_t *attachment)
 {
-    (void)backend;
+    auto *state = static_cast<wer_state_t *>(backend->data);
 
+    // For buffer attachments a copy was staged in the run directory; delete it.
     if (attachment && attachment->buf && attachment->path
         && sentry__path_remove(attachment->path) != 0) {
         SENTRY_WARNF(
             "failed to remove WER attachment \"%s\"", attachment->path->path);
+    }
+
+    // Regardless of attachment type, refresh the __sentry-attachments metadata
+    // file.  By the time this callback fires the core has already removed the
+    // attachment from the scope list, so the sync writes a file that no longer
+    // references the removed entry.  Without this the WER module would still
+    // try to open a file that no longer exists (or a staged copy that was just
+    // deleted above).
+    if (state && state->attachments_path) {
+        SENTRY_WITH_SCOPE (scope) {
+            wer_backend_sync_attachments(
+                state->attachments_path, scope->attachments);
+        }
     }
 }
 
