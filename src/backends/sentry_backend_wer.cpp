@@ -31,6 +31,7 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <mutex>
 #include <new>
 #include <string>
 #include <vector>
@@ -47,6 +48,10 @@ struct wer_state_t {
     sentry_path_t *attachments_path = nullptr;
     sentry_path_t *last_crash_path = nullptr;
     size_t num_breadcrumbs = 0;
+    // Serialises concurrent wer_backend_add_breadcrumb calls. Guards both the
+    // num_breadcrumbs counter and the file writes so that the rotation boundary
+    // (first_breadcrumb) and the actual write are always atomically paired.
+    std::mutex breadcrumb_mutex;
     // Prevents concurrent scope flushes (e.g. breadcrumb add racing with
     // except).
     std::atomic<bool> scope_flush { false };
@@ -198,7 +203,11 @@ wer_backend_run_has_envelope(const sentry_path_t *run_dir)
     // previous startup; skip it to avoid double-submission.
     sentry_pathiter_t *iter = sentry__path_iter_directory(run_dir);
     if (!iter) {
-        return false;
+        // Cannot determine state (e.g. transient I/O error or the directory
+        // was concurrently removed).  Err on the side of caution: treat the
+        // run as already having an envelope so we do not create a spurious
+        // duplicate during recovery.
+        return true;
     }
 
     bool has_envelope = false;
@@ -482,23 +491,12 @@ wer_backend_flush_scope_to_event(const sentry_path_t *event_path,
     }
 }
 
+// Core flush work: write the staged event and attachment-metadata files. Must
+// only be called with exclusive access (either via the CAS guard below or from
+// the crash handler where concurrency no longer matters).
 static void
-wer_backend_flush_scope(
-    sentry_backend_t *backend, const sentry_options_t *options)
+wer_backend_do_flush_scope(wer_state_t *state, const sentry_options_t *options)
 {
-    auto *state = static_cast<wer_state_t *>(backend->data);
-    if (!state || !state->event_path) {
-        return;
-    }
-
-    // CAS from false→true; if another flush is already running (concurrent
-    // breadcrumb callback), bail out rather than writing a partial scope.
-    bool expected = false;
-    if (!state->scope_flush.compare_exchange_strong(expected, true,
-            std::memory_order_acquire, std::memory_order_relaxed)) {
-        return;
-    }
-
     sentry_value_t event
         = sentry__value_new_event_with_id(&state->crash_event_id);
     sentry_value_set_by_key(
@@ -509,6 +507,28 @@ wer_backend_flush_scope(
         wer_backend_sync_attachments(
             state->attachments_path, scope->attachments);
     }
+}
+
+static void
+wer_backend_flush_scope(
+    sentry_backend_t *backend, const sentry_options_t *options)
+{
+    auto *state = static_cast<wer_state_t *>(backend->data);
+    if (!state || !state->event_path) {
+        return;
+    }
+
+    // CAS from false→true; if another flush is already running (concurrent
+    // breadcrumb callback or scope update), skip — the concurrent flush will
+    // persist an equally up-to-date view.  The crash handler bypasses this
+    // guard by calling wer_backend_do_flush_scope directly.
+    bool expected = false;
+    if (!state->scope_flush.compare_exchange_strong(expected, true,
+            std::memory_order_acquire, std::memory_order_relaxed)) {
+        return;
+    }
+
+    wer_backend_do_flush_scope(state, options);
 
     state->scope_flush.store(false, std::memory_order_release);
 }
@@ -526,6 +546,11 @@ wer_backend_add_breadcrumb(sentry_backend_t *backend, sentry_value_t breadcrumb,
     if (!max_breadcrumbs) {
         return;
     }
+
+    // Serialise so that the rotation decision (first_breadcrumb / which file)
+    // and the subsequent write are always atomic with respect to concurrent
+    // calls from multiple threads.
+    std::lock_guard<std::mutex> lk(state->breadcrumb_mutex);
 
     // Breadcrumbs are written to two alternating files
     // (breadcrumb1/breadcrumb2), each holding up to max_breadcrumbs entries.
@@ -1000,9 +1025,15 @@ wer_backend_prune_database(sentry_backend_t *backend)
             }
 
             if (sentry__filelock_try_lock(lock)) {
+                // Release the fd and remove the adjacent .lock file
+                // *before* remove_all.  On Windows an open file handle
+                // prevents deletion; sentry__filelock_unlock closes the
+                // fd and calls sentry__path_remove on the lock path so
+                // the run directory can be fully removed afterwards.
+                sentry__filelock_unlock(lock);
                 sentry__path_remove_all(run_dir);
-                sentry__path_remove(lockfile);
             }
+            // is_locked is now false, so free only deallocates memory.
             sentry__filelock_free(lock);
         }
 
@@ -1037,18 +1068,36 @@ static void
 wer_backend_remove_attachment(
     sentry_backend_t *backend, sentry_attachment_t *attachment)
 {
-    (void)backend;
+    auto *state = static_cast<wer_state_t *>(backend->data);
 
+    // For buffer attachments a copy was staged in the run directory; delete it.
     if (attachment && attachment->buf && attachment->path
         && sentry__path_remove(attachment->path) != 0) {
         SENTRY_WARNF(
             "failed to remove WER attachment \"%s\"", attachment->path->path);
+    }
+
+    // Regardless of attachment type, refresh the __sentry-attachments metadata
+    // file.  By the time this callback fires the core has already removed the
+    // attachment from the scope list, so the sync writes a file that no longer
+    // references the removed entry.  Without this the WER module would still
+    // try to open a file that no longer exists (or a staged copy that was just
+    // deleted above).
+    if (state && state->attachments_path) {
+        SENTRY_WITH_SCOPE (scope) {
+            wer_backend_sync_attachments(
+                state->attachments_path, scope->attachments);
+        }
     }
 }
 
 static void
 wer_backend_user_consent_changed(sentry_backend_t *backend)
 {
+    // Intentionally empty.  sentry_user_consent_give/revoke writes the
+    // "user-consent" file to disk *before* calling this hook, so the WER
+    // module (which reads that file via has_user_consent() at crash time)
+    // already sees the updated consent state.  No additional action is needed.
     (void)backend;
 }
 
@@ -1059,12 +1108,24 @@ wer_backend_except(sentry_backend_t *backend, const sentry_ucontext_t *ctx)
     // (e.g. via SetUnhandledExceptionFilter). It does NOT run inside the WER
     // module. For crashes that only WER can catch (CoreCLR-intercepted AV,
     // stowed exceptions), only the WER module path executes.
+    //
+    // For all other crashes both this handler AND the WER module run (WER fires
+    // after we return EXCEPTION_CONTINUE_SEARCH).  To prevent a duplicate
+    // event we zero the minidump_url in the shared runtime context so the WER
+    // module sees no upload URL and skips its own submission.  The WER module
+    // still writes a minidump to disk (useful for local post-mortem analysis)
+    // but will not attempt an upload.
     SENTRY_WITH_OPTIONS (options) {
         if (!options) {
             return;
         }
 
-        wer_backend_flush_scope(backend, options);
+        // Bypass the CAS guard so the crash-time flush always wins even if a
+        // concurrent scope flush (e.g. from a breadcrumb add) is in flight.
+        auto *state_early = static_cast<wer_state_t *>(backend->data);
+        if (state_early && state_early->event_path) {
+            wer_backend_do_flush_scope(state_early, options);
+        }
         sentry__write_crash_marker(options);
 
         if (options->enable_logs) {
@@ -1074,7 +1135,22 @@ wer_backend_except(sentry_backend_t *backend, const sentry_ucontext_t *ctx)
             sentry__metrics_flush_crash_safe();
         }
 
-        sentry_value_t event = sentry_value_new_event();
+        // Suppress the WER module's independent upload now that we are
+        // handling the event in-process.  This write is visible to
+        // WerFault.exe via ReadProcessMemory because runtime_ctx is backed by
+        // a VirtualAlloc'd page.
+        auto *state = static_cast<wer_state_t *>(backend->data);
+        if (state && state->runtime_ctx) {
+            state->runtime_ctx->minidump_url[0] = L'\0';
+        }
+
+        // Reuse the stable crash_event_id that was written into the staged
+        // __sentry-event file by wer_backend_flush_scope so that both code
+        // paths (this one and any future WER module upload) share the same
+        // event identifier.
+        sentry_value_t event = state
+            ? sentry__value_new_event_with_id(&state->crash_event_id)
+            : sentry_value_new_event();
         sentry_value_set_by_key(
             event, "level", sentry__value_new_level(SENTRY_LEVEL_FATAL));
 

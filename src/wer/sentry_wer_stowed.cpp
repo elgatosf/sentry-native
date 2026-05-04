@@ -190,8 +190,12 @@ sentry_stowed_write_stack_text(const wchar_t *path, HANDLE process,
         return true;
     };
 
+    // Maximum line length:
+    //   "#NN "   (4) + module_name (≤119) + "+0x" (3) + offset (≤16) +
+    //   " (0x" (4) + address (≤16) + ")\r\n" (3) + NUL (1) = 166 bytes.
+    // Use 200 to keep a comfortable margin.
     bool ok = true;
-    char line[160];
+    char line[200];
     for (ULONG i = 0; i < word_count && ok; ++i) {
         unsigned __int64 value = 0;
         SIZE_T to_copy = word_size;
