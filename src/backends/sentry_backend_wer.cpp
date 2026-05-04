@@ -203,7 +203,11 @@ wer_backend_run_has_envelope(const sentry_path_t *run_dir)
     // previous startup; skip it to avoid double-submission.
     sentry_pathiter_t *iter = sentry__path_iter_directory(run_dir);
     if (!iter) {
-        return false;
+        // Cannot determine state (e.g. transient I/O error or the directory
+        // was concurrently removed).  Err on the side of caution: treat the
+        // run as already having an envelope so we do not create a spurious
+        // duplicate during recovery.
+        return true;
     }
 
     bool has_envelope = false;
