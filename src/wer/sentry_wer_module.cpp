@@ -17,7 +17,6 @@ extern "C" {
 #include <stddef.h>
 #include <stdio.h>
 #include <string>
-#include <strsafe.h>
 #include <vector>
 #include <werapi.h>
 #include <windows.h>
@@ -143,29 +142,6 @@ build_path_file(
     if (dst->empty()) {
         return false;
     }
-    return true;
-}
-
-static bool
-create_dump_name(std::wstring *out)
-{
-    if (!out) {
-        return false;
-    }
-
-    SYSTEMTIME st;
-    GetSystemTime(&st);
-    DWORD tick = GetTickCount();
-
-    wchar_t buffer[96];
-    if (FAILED(StringCchPrintfW(buffer, _countof(buffer),
-            L"sentry_dump_%04u%02u%02u_%02u%02u%02u_%08lx.dmp", st.wYear,
-            st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
-            (unsigned long)tick))) {
-        return false;
-    }
-
-    *out = buffer;
     return true;
 }
 
@@ -403,9 +379,8 @@ write_minidump(
         return false;
     }
 
-    std::wstring filename;
-    if (!create_dump_name(&filename)
-        || !build_path_file(g_state.run_path, filename.c_str(), path_out)) {
+    if (!build_path_file(
+            g_state.run_path, SENTRY_WER_MINIDUMP_FILE_W, path_out)) {
         return false;
     }
 
@@ -606,6 +581,12 @@ upload_dump(
             SENTRY_WER_STOWED_STACK_FILE_A, stowed_stack_data, stowed_stack_len,
             true, "text/plain");
     }
+    // Sentry deduplicates multipart parts by their form-data `name` field.
+    // Use an indexed name (attachment_0, attachment_1, …) rather than the
+    // user filename so that two attachments with the same filename produce
+    // two distinct parts.  The human-readable filename is preserved in the
+    // separate `filename` parameter of the Content-Disposition header.
+    size_t attachment_index = 0;
     for (const auto &attachment : attachments) {
         if (err) {
             break;
@@ -619,7 +600,10 @@ upload_dump(
             continue;
         }
 
-        err = append_part_fn(&sb, boundary, attachment.filename.c_str(),
+        char name_buf[32];
+        _snprintf_s(name_buf, _countof(name_buf), _TRUNCATE, "attachment_%zu",
+            attachment_index++);
+        err = append_part_fn(&sb, boundary, name_buf,
             attachment.filename.c_str(), attachment_data, attachment_len, true,
             attachment.content_type.c_str());
         HeapFree(GetProcessHeap(), 0, attachment_data);
