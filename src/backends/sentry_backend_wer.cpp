@@ -1010,9 +1010,15 @@ wer_backend_prune_database(sentry_backend_t *backend)
             }
 
             if (sentry__filelock_try_lock(lock)) {
+                // Release the fd and remove the adjacent .lock file
+                // *before* remove_all.  On Windows an open file handle
+                // prevents deletion; sentry__filelock_unlock closes the
+                // fd and calls sentry__path_remove on the lock path so
+                // the run directory can be fully removed afterwards.
+                sentry__filelock_unlock(lock);
                 sentry__path_remove_all(run_dir);
-                sentry__path_remove(lockfile);
             }
+            // is_locked is now false, so free only deallocates memory.
             sentry__filelock_free(lock);
         }
 
