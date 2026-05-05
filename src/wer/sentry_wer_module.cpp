@@ -656,8 +656,10 @@ write_minidump(
         log_line(L"Adding %Iu stowed memory ranges to minidump", range_count);
     }
 
-    MINIDUMP_TYPE dump_type = static_cast<MINIDUMP_TYPE>(
-        MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithDataSegs);
+    // MiniDumpWithIndirectlyReferencedMemory keeps relatively small dumps while
+    // preserving stowed exceptions and its references
+    MINIDUMP_TYPE dump_type
+        = static_cast<MINIDUMP_TYPE>(MiniDumpWithIndirectlyReferencedMemory);
     BOOL ok = MiniDumpWriteDump(info->hProcess, GetProcessId(info->hProcess), h,
         dump_type, &mei, nullptr, cb_info_ptr);
     CloseHandle(h);
