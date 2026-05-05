@@ -131,7 +131,8 @@ sentry_stowed_read_stack_word(HANDLE process,
     const sentry_stowed_exception_information_v2 &info, unsigned index,
     unsigned __int64 *out)
 {
-    if (!out || info.form.bits.exception_form != SENTRY_WER_STOWED_FORM_BINARY) {
+    if (!out
+        || info.form.bits.exception_form != SENTRY_WER_STOWED_FORM_BINARY) {
         return false;
     }
 
@@ -165,7 +166,8 @@ static bool
 sentry_stowed_read_grouping_address(HANDLE process,
     const sentry_stowed_exception_information_v2 &info, unsigned __int64 *out)
 {
-    if (!out || info.form.bits.exception_form != SENTRY_WER_STOWED_FORM_BINARY) {
+    if (!out
+        || info.form.bits.exception_form != SENTRY_WER_STOWED_FORM_BINARY) {
         return false;
     }
 
@@ -185,15 +187,13 @@ sentry_stowed_append_fingerprint(char *fingerprint, size_t fingerprint_len,
         return;
     }
 
+    (void)process;
+
     char nested[5];
     sentry_stowed_fourcc_to_string(info.nested_exception_type, nested);
-    unsigned __int64 grouping_address = 0;
-    sentry_stowed_read_grouping_address(process, info, &grouping_address);
-
     char part[160];
-    _snprintf_s(part, _countof(part), _TRUNCATE,
-        "stowed%u:0x%08lx:%s:0x%016I64x", index,
-        (unsigned long)(ULONG)info.result_code, nested, grouping_address);
+    _snprintf_s(part, _countof(part), _TRUNCATE, "stowed%u:0x%08lx:%s", index,
+        (unsigned long)(ULONG)info.result_code, nested);
 
     if (fingerprint[0]) {
         strncat_s(fingerprint, fingerprint_len, "|", _TRUNCATE);
@@ -211,15 +211,15 @@ sentry_stowed_write_memory_preview(
 
     BYTE buffer[SENTRY_WER_NESTED_PREVIEW_LIMIT] = { };
     SIZE_T bytes_read = 0;
-    if (!ReadProcessMemory(process, (LPCVOID)address, buffer, sizeof(buffer),
-            &bytes_read)
+    if (!ReadProcessMemory(
+            process, (LPCVOID)address, buffer, sizeof(buffer), &bytes_read)
         || !bytes_read) {
-        return sentry_stowed_write_line(file,
-            "    Raw preview: unavailable (ReadProcessMemory failed)");
+        return sentry_stowed_write_line(
+            file, "    Raw preview: unavailable (ReadProcessMemory failed)");
     }
 
-    if (!sentry_stowed_write_line(file, "    Raw preview (%Iu bytes):",
-            (unsigned __int64)bytes_read)) {
+    if (!sentry_stowed_write_line(file,
+            "    Raw preview (%Iu bytes):", (unsigned __int64)bytes_read)) {
         return false;
     }
 
@@ -347,8 +347,7 @@ sentry_stowed_write_stack_text(const wchar_t *path, HANDLE process,
     }
 
     bool ok = true;
-    ok = sentry_stowed_write_line(file.get(),
-        "Stowed Exception @ inline")
+    ok = sentry_stowed_write_line(file.get(), "Stowed Exception @ inline")
         && sentry_stowed_write_line(file.get(), "  ResultCode: 0x%08lx",
             (unsigned long)(ULONG)info.result_code)
         && sentry_stowed_write_line(file.get(), "  Form: %s (%lu)",
@@ -379,9 +378,8 @@ sentry_stowed_write_stack_text(const wchar_t *path, HANDLE process,
                 strcpy_s(module_name, "?");
             }
 
-            unsigned __int64 delta = module_base && value >= module_base
-                ? value - module_base
-                : 0;
+            unsigned __int64 delta
+                = module_base && value >= module_base ? value - module_base : 0;
             ok = sentry_stowed_write_line(file.get(),
                 "    #%02lu %s+0x%I64x (0x%016I64x) type=0x%lx protect=0x%lx",
                 (unsigned long)i, module_name, delta, value,
@@ -389,8 +387,8 @@ sentry_stowed_write_stack_text(const wchar_t *path, HANDLE process,
         }
 
         if (ok && word_count > 64) {
-            ok = sentry_stowed_write_line(
-                file.get(), "    ... %lu more stack words omitted",
+            ok = sentry_stowed_write_line(file.get(),
+                "    ... %lu more stack words omitted",
                 (unsigned long)(word_count - 64));
         }
     }
@@ -513,8 +511,8 @@ sentry_stowed_write_stack_section(HANDLE file, HANDLE process,
     for (ULONG i = 0; i < word_count && i < 64; ++i) {
         unsigned __int64 value = 0;
         if (!sentry_stowed_read_stack_word(process, info, i, &value)) {
-            if (!sentry_stowed_write_line(
-                    file, "%s  #%02lu <unreadable>", indent, (unsigned long)i)) {
+            if (!sentry_stowed_write_line(file, "%s  #%02lu <unreadable>",
+                    indent, (unsigned long)i)) {
                 return false;
             }
             continue;
@@ -529,9 +527,8 @@ sentry_stowed_write_stack_section(HANDLE file, HANDLE process,
             strcpy_s(module_name, "?");
         }
 
-        unsigned __int64 delta = module_base && value >= module_base
-            ? value - module_base
-            : 0;
+        unsigned __int64 delta
+            = module_base && value >= module_base ? value - module_base : 0;
         if (!sentry_stowed_write_line(file,
                 "%s  #%02lu %s+0x%I64x (0x%016I64x) type=0x%lx protect=0x%lx",
                 indent, (unsigned long)i, module_name, delta, value,
@@ -557,8 +554,8 @@ sentry_stowed_write_exception_report(HANDLE file, HANDLE process,
     char nested[5];
     sentry_stowed_fourcc_to_string(info.nested_exception_type, nested);
 
-    if (!sentry_stowed_write_line(file, "%sAddress: %p", indent,
-            (void *)address)
+    if (!sentry_stowed_write_line(
+            file, "%sAddress: %p", indent, (void *)address)
         || !sentry_stowed_write_line(file, "%sHeader: %s size=%lu", indent,
             sentry_stowed_signature_name(info.header.signature),
             (unsigned long)info.header.size)
@@ -575,7 +572,8 @@ sentry_stowed_write_exception_report(HANDLE file, HANDLE process,
     if (info.form.bits.exception_form == SENTRY_WER_STOWED_FORM_BINARY) {
         if (!sentry_stowed_write_line(file, "%sExceptionAddress: %p", indent,
                 info.payload.binary.exception_address)
-            || !sentry_stowed_write_stack_section(file, process, info, indent)) {
+            || !sentry_stowed_write_stack_section(
+                file, process, info, indent)) {
             return false;
         }
     } else if (info.form.bits.exception_form == SENTRY_WER_STOWED_FORM_TEXT) {
@@ -585,11 +583,10 @@ sentry_stowed_write_exception_report(HANDLE file, HANDLE process,
         }
     }
 
-    if (!sentry_stowed_write_line(file,
-            "%sNestedExceptionType: %s (0x%08lx)", indent, nested,
-            (unsigned long)info.nested_exception_type)
-        || !sentry_stowed_write_line(file, "%sNestedException: %p", indent,
-            info.nested_exception)) {
+    if (!sentry_stowed_write_line(file, "%sNestedExceptionType: %s (0x%08lx)",
+            indent, nested, (unsigned long)info.nested_exception_type)
+        || !sentry_stowed_write_line(
+            file, "%sNestedException: %p", indent, info.nested_exception)) {
         return false;
     }
 
@@ -602,8 +599,8 @@ sentry_stowed_write_exception_report(HANDLE file, HANDLE process,
     if (depth + 1 < SENTRY_WER_STOWED_MAX_NESTING_DEPTH
         && sentry_stowed_read_exception(
             process, nested_address, &nested_info, nullptr)) {
-        return sentry_stowed_write_line(file, "%sNested stowed exception:",
-                   indent)
+        return sentry_stowed_write_line(
+                   file, "%sNested stowed exception:", indent)
             && sentry_stowed_write_exception_report(
                 file, process, nested_address, nested_info, depth + 1);
     }
@@ -621,10 +618,12 @@ sentry_stowed_write_exception_report(HANDLE file, HANDLE process,
             return false;
         }
         if (!sentry_stowed_write_line(file,
-                "%sCLR stack frames require CLR/SOS decoding; raw nested memory follows.",
+                "%sCLR stack frames require CLR/SOS decoding; raw nested "
+                "memory follows.",
                 indent)
             || !sentry_stowed_write_line(file,
-                "%sUse the minidump with !dse/!pe when full managed frames are needed.",
+                "%sUse the minidump with !dse/!pe when full managed frames are "
+                "needed.",
                 indent)) {
             return false;
         }
@@ -649,8 +648,7 @@ sentry_stowed_write_report_text(const wchar_t *path, HANDLE process,
         return false;
     }
 
-    bool ok = sentry_stowed_write_line(
-        file.get(), "Stowed Exception Report")
+    bool ok = sentry_stowed_write_line(file.get(), "Stowed Exception Report")
         && sentry_stowed_write_line(file.get(), "Entries captured: %lu", count);
     if (ok && fingerprint && fingerprint[0]) {
         ok = sentry_stowed_write_line(
@@ -667,13 +665,13 @@ sentry_stowed_write_report_text(const wchar_t *path, HANDLE process,
             break;
         }
         if (!have[i]) {
-            ok = sentry_stowed_write_line(file.get(), "  Address: %p",
-                (void *)entry_ptrs[i])
+            ok = sentry_stowed_write_line(
+                     file.get(), "  Address: %p", (void *)entry_ptrs[i])
                 && sentry_stowed_write_line(file.get(), "  <unreadable>");
             continue;
         }
         ok = sentry_stowed_write_exception_report(
-            file.get(), process, entry_ptrs[i], entries[i], 0)
+                 file.get(), process, entry_ptrs[i], entries[i], 0)
             && sentry_stowed_write_line(file.get(), "");
     }
 
@@ -781,9 +779,10 @@ sentry_stowed_collect_exception_memory(HANDLE process,
     }
 
     sentry_stowed_exception_information_v2 nested = { };
-    if (sentry_stowed_read_exception(process, nested_address, &nested, log_fn)) {
-        sentry_stowed_collect_exception_memory(process, nested, ranges, added,
-            max_ranges, log_fn, depth + 1);
+    if (sentry_stowed_read_exception(
+            process, nested_address, &nested, log_fn)) {
+        sentry_stowed_collect_exception_memory(
+            process, nested, ranges, added, max_ranges, log_fn, depth + 1);
     }
 }
 
@@ -860,15 +859,14 @@ sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn,
             info->hProcess, entry_ptrs[i], &stowed_entries[i], log_fn);
         if (!have_stowed[i]) {
             if (log_fn) {
-                log_fn(L"Failed to read stowed blob at %p",
-                    (void *)entry_ptrs[i]);
+                log_fn(
+                    L"Failed to read stowed blob at %p", (void *)entry_ptrs[i]);
             }
             continue;
         }
 
         if (log_fn) {
-            log_fn(L"Stowed exception #%lu form=%lu",
-                (unsigned long)(i + 1),
+            log_fn(L"Stowed exception #%lu form=%lu", (unsigned long)(i + 1),
                 (unsigned long)stowed_entries[i].form.bits.exception_form);
         }
 

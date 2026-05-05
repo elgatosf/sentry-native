@@ -5,8 +5,8 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
-#include <windows.h>
 #include <werapi.h>
+#include <windows.h>
 
 #ifndef PSAPI_VERSION
 #    define PSAPI_VERSION 2

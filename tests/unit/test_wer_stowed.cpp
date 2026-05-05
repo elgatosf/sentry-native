@@ -133,6 +133,7 @@ extern "C" SENTRY_TEST(wer_stowed_collects_ranges_and_writes_stack_text)
     TEST_CHECK(fingerprint[0] != '\0');
     TEST_CHECK(strstr(fingerprint, "stowed1:") != nullptr);
     TEST_CHECK(strstr(fingerprint, "stowed2:") != nullptr);
+    TEST_CHECK(strstr(fingerprint, "+0x") == nullptr);
     TEST_CHECK(
         GetFileAttributesW(temp_path.c_str()) != INVALID_FILE_ATTRIBUTES);
 
@@ -140,7 +141,8 @@ extern "C" SENTRY_TEST(wer_stowed_collects_ranges_and_writes_stack_text)
     TEST_CHECK(stack_text.find("Stowed Exception #1") != std::string::npos);
     TEST_CHECK(stack_text.find("Stowed Exception #2") != std::string::npos);
     TEST_CHECK(stack_text.find("Nested stowed exception") != std::string::npos);
-    TEST_CHECK(stack_text.find("Associated CLR exception") != std::string::npos);
+    TEST_CHECK(
+        stack_text.find("Associated CLR exception") != std::string::npos);
     TEST_CHECK(stack_text.find("CLR stack hint address") != std::string::npos);
     TEST_CHECK(stack_text.find("Suggested fingerprint") != std::string::npos);
     TEST_CHECK(stack_text.find("#00 ") != std::string::npos);
