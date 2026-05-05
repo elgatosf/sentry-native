@@ -103,8 +103,22 @@ extern "C" SENTRY_TEST(wer_stowed_collects_ranges_and_writes_stack_text)
     stowed2.payload.binary.stack_trace_word_size = sizeof(void *);
     stowed2.payload.binary.stack_trace_words = _countof(stack_words);
     stowed2.payload.binary.stack_trace = stack_words;
+
+    auto leo1_secondary = (ULONG_PTR *)VirtualAlloc(
+        nullptr, 256, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    auto leo1_message = (ULONG_PTR *)VirtualAlloc(
+        nullptr, 256, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    TEST_ASSERT(leo1_secondary != nullptr);
+    TEST_ASSERT(leo1_message != nullptr);
+
+    ULONG_PTR leo1_words[SENTRY_WER_NESTED_PREVIEW_LIMIT / sizeof(ULONG_PTR)]
+        = { };
+    leo1_secondary[0] = (ULONG_PTR)leo1_message;
+    leo1_words[4] = (ULONG_PTR)leo1_secondary;
+    leo1_words[31] = (ULONG_PTR)leo1_message;
+
     stowed2.nested_exception_type = SENTRY_WER_NESTED_TYPE_LEO1;
-    stowed2.nested_exception = stack_words;
+    stowed2.nested_exception = leo1_words;
 
     sentry_stowed_exception_information_v2 stowed3 = stowed;
     stowed3.result_code = E_ACCESSDENIED;
@@ -146,14 +160,23 @@ extern "C" SENTRY_TEST(wer_stowed_collects_ranges_and_writes_stack_text)
         GetFileAttributesW(temp_path.c_str()) != INVALID_FILE_ATTRIBUTES);
 
     bool found_pointer_array = false;
+    bool found_leo1_secondary = false;
+    bool found_leo1_message = false;
     for (const auto &range : ranges) {
         if (range.base == (ULONG64)(ULONG_PTR)entry_ptrs
             && range.size >= sizeof(entry_ptrs)) {
             found_pointer_array = true;
-            break;
+        }
+        if (range.base == (ULONG64)(ULONG_PTR)leo1_secondary) {
+            found_leo1_secondary = true;
+        }
+        if (range.base == (ULONG64)(ULONG_PTR)leo1_message) {
+            found_leo1_message = true;
         }
     }
     TEST_CHECK(found_pointer_array);
+    TEST_CHECK(found_leo1_secondary);
+    TEST_CHECK(found_leo1_message);
 
     std::string stack_text = read_text_file_utf8(temp_path.c_str());
     TEST_CHECK(stack_text.find("Entries captured: 2") != std::string::npos);
@@ -170,6 +193,8 @@ extern "C" SENTRY_TEST(wer_stowed_collects_ranges_and_writes_stack_text)
     TEST_CHECK(stack_text.find("#-- end --") != std::string::npos);
 
     DeleteFileW(temp_path.c_str());
+    VirtualFree(leo1_message, 0, MEM_RELEASE);
+    VirtualFree(leo1_secondary, 0, MEM_RELEASE);
 #else
     SKIP_TEST();
 #endif

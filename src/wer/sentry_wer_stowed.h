@@ -18,13 +18,16 @@
 
 constexpr size_t SENTRY_WER_STOWED_MAX_POINTERS = 2;
 constexpr size_t SENTRY_WER_STOWED_MAX_POINTER_ARRAY_ENTRIES = 64;
-constexpr size_t SENTRY_WER_STOWED_MAX_RANGES = 24;
+constexpr size_t SENTRY_WER_STOWED_MAX_RANGES = 32;
 constexpr SIZE_T SENTRY_WER_STOWED_COPY_LIMIT
     = 64 * 1024; // cap per-region ReadProcessMemory to avoid large allocations
 constexpr SIZE_T SENTRY_WER_EXCEPTION_ADDR_LIMIT
     = 512; // enough for the HRESULT+context at the exception address
 constexpr SIZE_T SENTRY_WER_ERROR_TEXT_LIMIT = 32 * 1024;
 constexpr SIZE_T SENTRY_WER_NESTED_PREVIEW_LIMIT = 256;
+constexpr SIZE_T SENTRY_WER_NESTED_INDIRECT_LIMIT = 4 * 1024;
+constexpr size_t SENTRY_WER_NESTED_INDIRECT_MAX_DEPTH = 2;
+constexpr size_t SENTRY_WER_NESTED_INDIRECT_MAX_TARGETS = 6;
 constexpr size_t SENTRY_WER_STOWED_MAX_NESTING_DEPTH = 3;
 // 'SE01' / 'SE02' — the two known signature values that identify a valid
 // stowed-exception blob.

@@ -715,6 +715,92 @@ sentry_stowed_add_pointer_range_if_valid(HANDLE process, ULONG_PTR address,
     return true;
 }
 
+static bool
+sentry_stowed_looks_like_pointer(ULONG_PTR value)
+{
+#if defined(_WIN64)
+    return value >= 0x10000 && value <= 0x00007FFFFFFFFFFFULL;
+#else
+    return value >= 0x10000;
+#endif
+}
+
+static void
+sentry_stowed_collect_indirect_memory(HANDLE process, ULONG_PTR address,
+    sentry_minidump_memory_range *ranges, size_t *added, size_t max_ranges,
+    sentry_stowed_log_fn log_fn, size_t depth)
+{
+    if (!process || !address || !ranges || !added
+        || depth >= SENTRY_WER_NESTED_INDIRECT_MAX_DEPTH) {
+        return;
+    }
+
+    MEMORY_BASIC_INFORMATION source_mbi;
+    if (!VirtualQueryEx(
+            process, (LPCVOID)address, &source_mbi, sizeof(source_mbi))) {
+        return;
+    }
+
+    SIZE_T offset = (SIZE_T)(address - (ULONG_PTR)source_mbi.BaseAddress);
+    if (offset >= source_mbi.RegionSize) {
+        return;
+    }
+
+    SIZE_T inspect_bytes = source_mbi.RegionSize - offset;
+    if (inspect_bytes > SENTRY_WER_NESTED_PREVIEW_LIMIT) {
+        inspect_bytes = SENTRY_WER_NESTED_PREVIEW_LIMIT;
+    }
+    if (inspect_bytes < sizeof(ULONG_PTR)) {
+        return;
+    }
+
+    BYTE buffer[SENTRY_WER_NESTED_PREVIEW_LIMIT] = { };
+    SIZE_T bytes_read = 0;
+    if (!ReadProcessMemory(
+            process, (LPCVOID)address, buffer, inspect_bytes, &bytes_read)
+        || bytes_read < sizeof(ULONG_PTR)) {
+        return;
+    }
+
+    const ULONG_PTR source_base = (ULONG_PTR)source_mbi.BaseAddress;
+    const ULONG_PTR source_end = source_base + source_mbi.RegionSize;
+    size_t targets = 0;
+    for (SIZE_T i = 0; i + sizeof(ULONG_PTR) <= bytes_read;
+        i += sizeof(ULONG_PTR)) {
+        ULONG_PTR candidate = 0;
+        memcpy(&candidate, buffer + i, sizeof(candidate));
+
+        if (!sentry_stowed_looks_like_pointer(candidate)
+            || (candidate >= source_base && candidate < source_end)) {
+            continue;
+        }
+
+        MEMORY_BASIC_INFORMATION target_mbi;
+        if (!VirtualQueryEx(
+                process, (LPCVOID)candidate, &target_mbi, sizeof(target_mbi))) {
+            continue;
+        }
+        if (target_mbi.State != MEM_COMMIT || target_mbi.Type == MEM_IMAGE
+            || (target_mbi.Protect & PAGE_NOACCESS)
+            || (target_mbi.Protect & PAGE_GUARD)) {
+            continue;
+        }
+
+        if (!sentry_stowed_add_pointer_range_if_valid(process, candidate,
+                SENTRY_WER_NESTED_INDIRECT_LIMIT, ranges, added, max_ranges,
+                log_fn)) {
+            continue;
+        }
+
+        sentry_stowed_collect_indirect_memory(
+            process, candidate, ranges, added, max_ranges, log_fn, depth + 1);
+        targets++;
+        if (targets >= SENTRY_WER_NESTED_INDIRECT_MAX_TARGETS) {
+            break;
+        }
+    }
+}
+
 static void
 sentry_stowed_collect_exception_memory(HANDLE process,
     const sentry_stowed_exception_information_v2 &stowed,
@@ -770,6 +856,11 @@ sentry_stowed_collect_exception_memory(HANDLE process,
     ULONG_PTR nested_address = (ULONG_PTR)stowed.nested_exception;
     sentry_stowed_add_pointer_range_if_valid(process, nested_address,
         SENTRY_WER_STOWED_COPY_LIMIT, ranges, added, max_ranges, log_fn);
+
+    if (stowed.nested_exception_type == SENTRY_WER_NESTED_TYPE_LEO1) {
+        sentry_stowed_collect_indirect_memory(
+            process, nested_address, ranges, added, max_ranges, log_fn, 0);
+    }
 
     if (depth + 1 >= SENTRY_WER_STOWED_MAX_NESTING_DEPTH) {
         return;
@@ -835,8 +926,8 @@ sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn, HANDLE process,
     SIZE_T expected = (SIZE_T)array_count * sizeof(ULONG_PTR);
     SIZE_T bytes_read = 0;
     size_t added = 0;
-    if (!sentry_stowed_add_pointer_range_if_valid(process, array.base, expected,
-            ranges, &added, max_ranges, log_fn)
+    if (!sentry_stowed_add_pointer_range_if_valid(
+            process, array.base, expected, ranges, &added, max_ranges, log_fn)
         && log_fn) {
         log_fn(L"Failed to queue stowed pointer array range @%p bytes=%Iu",
             (void *)array.base, (unsigned __int64)expected);
