@@ -17,7 +17,8 @@
 #endif
 
 constexpr size_t SENTRY_WER_STOWED_MAX_POINTERS = 2;
-constexpr size_t SENTRY_WER_STOWED_MAX_RANGES = 12;
+constexpr size_t SENTRY_WER_STOWED_MAX_POINTER_ARRAY_ENTRIES = 64;
+constexpr size_t SENTRY_WER_STOWED_MAX_RANGES = 24;
 constexpr SIZE_T SENTRY_WER_STOWED_COPY_LIMIT
     = 64 * 1024; // cap per-region ReadProcessMemory to avoid large allocations
 constexpr SIZE_T SENTRY_WER_EXCEPTION_ADDR_LIMIT

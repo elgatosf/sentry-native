@@ -106,9 +106,21 @@ extern "C" SENTRY_TEST(wer_stowed_collects_ranges_and_writes_stack_text)
     stowed2.nested_exception_type = SENTRY_WER_NESTED_TYPE_LEO1;
     stowed2.nested_exception = stack_words;
 
+    sentry_stowed_exception_information_v2 stowed3 = stowed;
+    stowed3.result_code = E_ACCESSDENIED;
+    stowed3.nested_exception_type = 0;
+    stowed3.nested_exception = nullptr;
+
+    sentry_stowed_exception_information_v2 stowed4 = stowed2;
+    stowed4.result_code = E_NOTIMPL;
+    stowed4.nested_exception_type = 0;
+    stowed4.nested_exception = nullptr;
+
     ULONG_PTR entry_ptrs[] = {
         (ULONG_PTR)&stowed,
         (ULONG_PTR)&stowed2,
+        (ULONG_PTR)&stowed3,
+        (ULONG_PTR)&stowed4,
     };
 
     EXCEPTION_RECORD record = { };
@@ -125,7 +137,7 @@ extern "C" SENTRY_TEST(wer_stowed_collects_ranges_and_writes_stack_text)
         GetCurrentProcess(), record, ranges, _countof(ranges),
         temp_path.c_str(), fingerprint, sizeof(fingerprint));
 
-    TEST_CHECK(range_count >= 3);
+    TEST_CHECK(range_count >= 4);
     TEST_CHECK(fingerprint[0] != '\0');
     TEST_CHECK(strstr(fingerprint, "stowed1:") != nullptr);
     TEST_CHECK(strstr(fingerprint, "stowed2:") != nullptr);
@@ -133,9 +145,21 @@ extern "C" SENTRY_TEST(wer_stowed_collects_ranges_and_writes_stack_text)
     TEST_CHECK(
         GetFileAttributesW(temp_path.c_str()) != INVALID_FILE_ATTRIBUTES);
 
+    bool found_pointer_array = false;
+    for (const auto &range : ranges) {
+        if (range.base == (ULONG64)(ULONG_PTR)entry_ptrs
+            && range.size >= sizeof(entry_ptrs)) {
+            found_pointer_array = true;
+            break;
+        }
+    }
+    TEST_CHECK(found_pointer_array);
+
     std::string stack_text = read_text_file_utf8(temp_path.c_str());
+    TEST_CHECK(stack_text.find("Entries captured: 2") != std::string::npos);
     TEST_CHECK(stack_text.find("Stowed Exception #1") != std::string::npos);
     TEST_CHECK(stack_text.find("Stowed Exception #2") != std::string::npos);
+    TEST_CHECK(stack_text.find("Stowed Exception #3") == std::string::npos);
     TEST_CHECK(stack_text.find("Nested stowed exception") != std::string::npos);
     TEST_CHECK(
         stack_text.find("Associated CLR exception") != std::string::npos);

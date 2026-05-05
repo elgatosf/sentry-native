@@ -811,7 +811,17 @@ sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn, HANDLE process,
         return 0;
     }
 
-    ULONG count = array.count;
+    ULONG array_count = array.count;
+    if (array_count > SENTRY_WER_STOWED_MAX_POINTER_ARRAY_ENTRIES) {
+        if (log_fn) {
+            log_fn(L"Stowed pointer array count capped from %lu to %Iu",
+                array.count,
+                (unsigned __int64)SENTRY_WER_STOWED_MAX_POINTER_ARRAY_ENTRIES);
+        }
+        array_count = (ULONG)SENTRY_WER_STOWED_MAX_POINTER_ARRAY_ENTRIES;
+    }
+
+    ULONG count = array_count;
     if (count > SENTRY_WER_STOWED_MAX_POINTERS) {
         count = (ULONG)SENTRY_WER_STOWED_MAX_POINTERS;
     }
@@ -821,9 +831,16 @@ sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn, HANDLE process,
             array.count);
     }
 
-    std::array<ULONG_PTR, SENTRY_WER_STOWED_MAX_POINTERS> entry_ptrs = { };
-    SIZE_T expected = (SIZE_T)count * sizeof(ULONG_PTR);
+    std::vector<ULONG_PTR> entry_ptrs(array_count, 0);
+    SIZE_T expected = (SIZE_T)array_count * sizeof(ULONG_PTR);
     SIZE_T bytes_read = 0;
+    size_t added = 0;
+    if (!sentry_stowed_add_pointer_range_if_valid(process, array.base, expected,
+            ranges, &added, max_ranges, log_fn)
+        && log_fn) {
+        log_fn(L"Failed to queue stowed pointer array range @%p bytes=%Iu",
+            (void *)array.base, (unsigned __int64)expected);
+    }
     if (!ReadProcessMemory(process, (LPCVOID)array.base, entry_ptrs.data(),
             expected, &bytes_read)
         || bytes_read < expected) {
@@ -834,7 +851,6 @@ sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn, HANDLE process,
         return 0;
     }
 
-    size_t added = 0;
     for (ULONG i = 0; i < count; ++i) {
         if (!entry_ptrs[i]) {
             continue;
@@ -871,6 +887,22 @@ sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn, HANDLE process,
             fingerprint, fingerprint_len, i + 1, stowed_entries[i]);
         sentry_stowed_collect_exception_memory(
             process, stowed_entries[i], ranges, &added, max_ranges, log_fn, 0);
+    }
+
+    for (ULONG i = count; i < array_count; ++i) {
+        if (!entry_ptrs[i]) {
+            continue;
+        }
+        sentry_stowed_add_pointer_range_if_valid(process, entry_ptrs[i],
+            SENTRY_WER_STOWED_COPY_LIMIT, ranges, &added, max_ranges, log_fn);
+
+        sentry_stowed_exception_information_v2 extra_stowed = { };
+        if (sentry_stowed_read_exception(
+                process, entry_ptrs[i], &extra_stowed, log_fn)) {
+            sentry_stowed_collect_exception_memory(process, extra_stowed,
+                ranges, &added, max_ranges, log_fn,
+                SENTRY_WER_STOWED_MAX_NESTING_DEPTH - 1);
+        }
     }
 
     if (stack_text_path && stack_text_path[0]) {
