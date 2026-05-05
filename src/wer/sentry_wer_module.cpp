@@ -639,9 +639,9 @@ write_minidump(
     }
 
     char stowed_fingerprint[256] = { };
-    size_t range_count = sentry_stowed_collect_memory_ranges(log_line, info,
-        ranges.data(), ranges.size(), stack_path_ptr, stowed_fingerprint,
-        sizeof(stowed_fingerprint));
+    size_t range_count = sentry_stowed_collect_memory_ranges(log_line,
+        info->hProcess, info->exceptionRecord, ranges.data(), ranges.size(),
+        stack_path_ptr, stowed_fingerprint, sizeof(stowed_fingerprint));
     g_state.stowed_fingerprint = stowed_fingerprint;
     sentry_minidump_callback_ctx cb_ctx = { };
     MINIDUMP_CALLBACK_INFORMATION cb_info = { };

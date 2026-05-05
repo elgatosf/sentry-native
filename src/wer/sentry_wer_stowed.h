@@ -5,7 +5,6 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
-#include <werapi.h>
 #include <windows.h>
 
 #ifndef PSAPI_VERSION
@@ -168,7 +167,7 @@ bool sentry_stowed_add_pointer_range_if_valid(HANDLE process, ULONG_PTR address,
     size_t max_ranges, sentry_stowed_log_fn log_fn);
 
 size_t sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn,
-    const PWER_RUNTIME_EXCEPTION_INFORMATION info,
+    HANDLE process, const EXCEPTION_RECORD &record,
     sentry_minidump_memory_range *ranges, size_t max_ranges,
     const wchar_t *stack_text_path, char *fingerprint = nullptr,
     size_t fingerprint_len = 0);

@@ -117,17 +117,13 @@ extern "C" SENTRY_TEST(wer_stowed_collects_ranges_and_writes_stack_text)
     record.ExceptionInformation[0] = (ULONG_PTR)entry_ptrs;
     record.ExceptionInformation[1] = _countof(entry_ptrs);
 
-    WER_RUNTIME_EXCEPTION_INFORMATION info = { };
-    info.hProcess = GetCurrentProcess();
-    info.exceptionRecord = record;
-
     sentry_minidump_memory_range ranges[SENTRY_WER_STOWED_MAX_RANGES] = { };
     std::wstring temp_path = make_temp_file_path();
     char fingerprint[256] = { };
 
     size_t range_count = sentry_stowed_collect_memory_ranges(test_stowed_log,
-        &info, ranges, _countof(ranges), temp_path.c_str(), fingerprint,
-        sizeof(fingerprint));
+        GetCurrentProcess(), record, ranges, _countof(ranges),
+        temp_path.c_str(), fingerprint, sizeof(fingerprint));
 
     TEST_CHECK(range_count >= 3);
     TEST_CHECK(fingerprint[0] != '\0');

@@ -180,14 +180,11 @@ sentry_stowed_read_grouping_address(HANDLE process,
 
 static void
 sentry_stowed_append_fingerprint(char *fingerprint, size_t fingerprint_len,
-    HANDLE process, unsigned index,
-    const sentry_stowed_exception_information_v2 &info)
+    unsigned index, const sentry_stowed_exception_information_v2 &info)
 {
     if (!fingerprint || !fingerprint_len) {
         return;
     }
-
-    (void)process;
 
     char nested[5];
     sentry_stowed_fourcc_to_string(info.nested_exception_type, nested);
@@ -787,16 +784,16 @@ sentry_stowed_collect_exception_memory(HANDLE process,
 }
 
 size_t
-sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn,
-    const PWER_RUNTIME_EXCEPTION_INFORMATION info,
-    sentry_minidump_memory_range *ranges, size_t max_ranges,
-    const wchar_t *stack_text_path, char *fingerprint, size_t fingerprint_len)
+sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn, HANDLE process,
+    const EXCEPTION_RECORD &record, sentry_minidump_memory_range *ranges,
+    size_t max_ranges, const wchar_t *stack_text_path, char *fingerprint,
+    size_t fingerprint_len)
 {
     // Reads the stowed-exception pointer array from the crashed process,
     // resolves each entry's committed memory region via VirtualQueryEx,
     // and writes a text stack sidecar for binary-form entries.
     // Returns the number of memory ranges added to `ranges`.
-    if (!info || !ranges || !max_ranges) {
+    if (!process || !ranges || !max_ranges) {
         return 0;
     }
     if (fingerprint && fingerprint_len) {
@@ -804,7 +801,7 @@ sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn,
     }
 
     sentry_stowed_pointer_array array = { };
-    if (!sentry_stowed_load_pointer_array(info->exceptionRecord, &array)) {
+    if (!sentry_stowed_load_pointer_array(record, &array)) {
         return 0;
     }
     if (!array.count) {
@@ -827,8 +824,8 @@ sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn,
     std::array<ULONG_PTR, SENTRY_WER_STOWED_MAX_POINTERS> entry_ptrs = { };
     SIZE_T expected = (SIZE_T)count * sizeof(ULONG_PTR);
     SIZE_T bytes_read = 0;
-    if (!ReadProcessMemory(info->hProcess, (LPCVOID)array.base,
-            entry_ptrs.data(), expected, &bytes_read)
+    if (!ReadProcessMemory(process, (LPCVOID)array.base, entry_ptrs.data(),
+            expected, &bytes_read)
         || bytes_read < expected) {
         if (log_fn) {
             log_fn(L"ReadProcessMemory pointer array failed err=%lu bytes=%Iu",
@@ -842,7 +839,7 @@ sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn,
         if (!entry_ptrs[i]) {
             continue;
         }
-        sentry_stowed_add_pointer_range_if_valid(info->hProcess, entry_ptrs[i],
+        sentry_stowed_add_pointer_range_if_valid(process, entry_ptrs[i],
             SENTRY_WER_STOWED_COPY_LIMIT, ranges, &added, max_ranges, log_fn);
     }
 
@@ -856,7 +853,7 @@ sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn,
         }
 
         have_stowed[i] = sentry_stowed_read_exception(
-            info->hProcess, entry_ptrs[i], &stowed_entries[i], log_fn);
+            process, entry_ptrs[i], &stowed_entries[i], log_fn);
         if (!have_stowed[i]) {
             if (log_fn) {
                 log_fn(
@@ -870,14 +867,14 @@ sentry_stowed_collect_memory_ranges(sentry_stowed_log_fn log_fn,
                 (unsigned long)stowed_entries[i].form.bits.exception_form);
         }
 
-        sentry_stowed_append_fingerprint(fingerprint, fingerprint_len,
-            info->hProcess, i + 1, stowed_entries[i]);
-        sentry_stowed_collect_exception_memory(info->hProcess,
-            stowed_entries[i], ranges, &added, max_ranges, log_fn, 0);
+        sentry_stowed_append_fingerprint(
+            fingerprint, fingerprint_len, i + 1, stowed_entries[i]);
+        sentry_stowed_collect_exception_memory(
+            process, stowed_entries[i], ranges, &added, max_ranges, log_fn, 0);
     }
 
     if (stack_text_path && stack_text_path[0]) {
-        if (sentry_stowed_write_report_text(stack_text_path, info->hProcess,
+        if (sentry_stowed_write_report_text(stack_text_path, process,
                 entry_ptrs.data(), stowed_entries.data(), have_stowed.data(),
                 count, fingerprint)) {
             if (log_fn) {
