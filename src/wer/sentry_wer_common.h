@@ -58,6 +58,9 @@ struct sentry_wer_runtime_context_header {
 
 #define SENTRY_WER_MINIDUMP_FILE_W L"minidump.dmp"
 
+#define SENTRY_WER_UPLOADED_MARKER_FILE_W L"__sentry-wer-uploaded"
+#define SENTRY_WER_UPLOADED_MARKER_FILE_A "__sentry-wer-uploaded"
+
 #define SENTRY_WER_STOWED_STACK_FILE_W L"__sentry-stowed-stack.txt"
 #define SENTRY_WER_STOWED_STACK_FILE_A "__sentry-stowed-stack.txt"
 #define SENTRY_WER_MP_STOWED_STACK_PART "__sentry-stowed-stack"

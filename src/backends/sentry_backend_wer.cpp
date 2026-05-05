@@ -197,6 +197,16 @@ wer_backend_find_first_minidump(const sentry_path_t *run_dir)
 }
 
 static bool
+wer_backend_run_was_uploaded(const sentry_path_t *run_dir)
+{
+    sentry_path_t *marker_path
+        = sentry__path_join_str(run_dir, SENTRY_WER_UPLOADED_MARKER_FILE_A);
+    bool was_uploaded = marker_path && sentry__path_is_file(marker_path);
+    sentry__path_free(marker_path);
+    return was_uploaded;
+}
+
+static bool
 wer_backend_run_has_envelope(const sentry_path_t *run_dir)
 {
     // If a .envelope file already exists, the run was already recovered on a
@@ -337,10 +347,12 @@ wer_backend_write_recovered_envelope(
 static void
 wer_backend_prepare_old_runs(const sentry_options_t *options)
 {
-    // For each old .run directory that does not yet have a recovered envelope:
-    // reconstruct an envelope from the staged WER artifacts and write it so
-    // sentry__process_old_runs() can replay it. Skip the current run and any
-    // run that another process has locked.
+    // For each old .run directory:
+    // - if sentry_wer_module.dll already uploaded it successfully, remove it;
+    // - otherwise, if it does not yet have a recovered envelope, reconstruct
+    //   one from the staged WER artifacts so sentry__process_old_runs() can
+    //   replay it.
+    // Skip the current run and any run that another process has locked.
     if (!options || !options->database_path || !options->run
         || !options->run->run_path) {
         return;
@@ -354,10 +366,15 @@ wer_backend_prepare_old_runs(const sentry_options_t *options)
 
     const sentry_path_t *run_dir = nullptr;
     while ((run_dir = sentry__pathiter_next(db_iter)) != nullptr) {
+        bool was_uploaded = false;
         if (!sentry__path_is_dir(run_dir)
             || !sentry__path_ends_with(run_dir, ".run")
-            || strcmp(options->run->run_path->path, run_dir->path) == 0
-            || wer_backend_run_has_envelope(run_dir)) {
+            || strcmp(options->run->run_path->path, run_dir->path) == 0) {
+            continue;
+        }
+
+        was_uploaded = wer_backend_run_was_uploaded(run_dir);
+        if (!was_uploaded && wer_backend_run_has_envelope(run_dir)) {
             continue;
         }
 
@@ -369,6 +386,16 @@ wer_backend_prepare_old_runs(const sentry_options_t *options)
         }
 
         if (!sentry__filelock_try_lock(lock)) {
+            sentry__filelock_free(lock);
+            continue;
+        }
+
+        if (was_uploaded) {
+            sentry__filelock_unlock(lock);
+            if (sentry__path_remove_all(run_dir) != 0) {
+                SENTRY_WARNF(
+                    "failed to remove uploaded WER run \"%s\"", run_dir->path);
+            }
             sentry__filelock_free(lock);
             continue;
         }

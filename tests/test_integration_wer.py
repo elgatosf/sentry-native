@@ -75,6 +75,27 @@ def test_wer_crash_upload(cmake, httpserver, run_args):
 
 
 @pytest.mark.with_wer
+def test_wer_successful_upload_is_not_replayed_on_next_startup(cmake, httpserver):
+    tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "wer"})
+
+    env = dict(os.environ, SENTRY_DSN=make_dsn(httpserver))
+    httpserver.expect_oneshot_request("/api/123456/minidump/").respond_with_data("OK")
+
+    assert wait_for_no_werfault()
+
+    with httpserver.wait(timeout=60) as waiting:
+        run(tmp_path, "sentry_example", ["fastfail"], expect_failure=True, env=env)
+
+    assert waiting.result
+    assert len(httpserver.log) == 1
+    assert wait_for_no_werfault()
+
+    run(tmp_path, "sentry_example", ["flush", "no-setup"], env=env)
+
+    assert len(httpserver.log) == 1
+
+
+@pytest.mark.with_wer
 def test_wer_replays_staged_run_on_next_startup(cmake, httpserver, unreachable_dsn):
     tmp_path = cmake(["sentry_example"], {"SENTRY_BACKEND": "wer"})
     env = dict(os.environ, SENTRY_DSN=unreachable_dsn)

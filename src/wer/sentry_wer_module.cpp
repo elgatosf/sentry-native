@@ -90,6 +90,41 @@ log_line(const wchar_t *fmt, ...)
     OutputDebugStringW(buf);
 }
 
+static const wchar_t *
+status_to_name(wer_status status)
+{
+    switch (status) {
+    case WER_STATUS_OK:
+        return L"ok";
+    case WER_STATUS_CONTEXT_READ_FAIL:
+        return L"context-read-fail";
+    case WER_STATUS_NO_MINIDUMP_URL:
+        return L"no-minidump-url";
+    case WER_STATUS_CONSENT_REQUIRED:
+        return L"consent-required";
+    case WER_STATUS_DUMP_WRITE_FAIL:
+        return L"dump-write-fail";
+    case WER_STATUS_UPLOAD_FAIL:
+    default:
+        return L"upload-fail";
+    }
+}
+
+static const wchar_t *
+bool_to_wide(bool value)
+{
+    return value ? L"yes" : L"no";
+}
+
+static HRESULT
+log_and_status_to_hresult(wer_status status)
+{
+    HRESULT hr = status_to_hresult(status);
+    log_line(L"Callback exit status=%s hresult=0x%08lX", status_to_name(status),
+        (unsigned long)hr);
+    return hr;
+}
+
 struct sentry_minidump_callback_ctx {
     const sentry_minidump_memory_range *ranges;
     size_t range_count;
@@ -531,6 +566,27 @@ write_crash_marker(void)
     CloseHandle(h);
 }
 
+static void
+write_uploaded_marker(void)
+{
+    if (g_state.run_path.empty()) {
+        return;
+    }
+
+    std::wstring marker_path;
+    if (!build_path_file(g_state.run_path, SENTRY_WER_UPLOADED_MARKER_FILE_W,
+            &marker_path)) {
+        return;
+    }
+
+    static const BYTE uploaded_marker[] = "1";
+    if (!write_file(marker_path.c_str(), uploaded_marker,
+            (DWORD)(sizeof(uploaded_marker) - 1))) {
+        log_line(L"Failed to write upload marker for run \"%s\"",
+            g_state.run_path.c_str());
+    }
+}
+
 static bool
 write_minidump(
     const PWER_RUNTIME_EXCEPTION_INFORMATION info, std::wstring *path_out)
@@ -549,6 +605,10 @@ write_minidump(
     if (dump_file_path.empty()) {
         return false;
     }
+
+    log_line(L"Writing minidump target_pid=%lu target_tid=%lu path=\"%s\"",
+        info->hProcess ? GetProcessId(info->hProcess) : 0,
+        info->hThread ? GetThreadId(info->hThread) : 0, path_out->c_str());
 
     HANDLE h = CreateFileW(dump_file_path.c_str(), GENERIC_WRITE, 0, nullptr,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -605,6 +665,9 @@ write_minidump(
         delete_file_if_exists(path_out->c_str());
         return false;
     }
+
+    log_line(L"Minidump written path=\"%s\" stowed_ranges=%Iu",
+        path_out->c_str(), range_count);
 
     return true;
 }
@@ -663,6 +726,7 @@ upload_dump(
     url.dwUrlPathLength = _countof(path_buf);
     url.dwSchemeLength = 1;
     if (!WinHttpCrackUrl(ctx->minidump_url, 0, 0, &url)) {
+        log_line(L"WinHttpCrackUrl failed gle=%lu", GetLastError());
         return false;
     }
 
@@ -672,6 +736,7 @@ upload_dump(
     BYTE *dump_data = nullptr;
     DWORD dump_len = 0;
     if (!read_file(dump_file_path.c_str(), &dump_data, &dump_len)) {
+        log_line(L"Failed to read minidump \"%s\"", dump_file_path.c_str());
         return false;
     }
 
@@ -712,8 +777,21 @@ upload_dump(
         && patch_event_msgpack_with_stowed_fingerprint(
             &event_data, &event_len, g_state.stowed_fingerprint)) {
         write_file(event_path.c_str(), event_data, event_len);
+        log_line(L"Patched staged event with stowed fingerprint");
     }
     std::vector<wer_attachment_entry> attachments = read_attachment_entries();
+
+    INTERNET_PORT port = url.nPort
+        ? url.nPort
+        : (url.nScheme == INTERNET_SCHEME_HTTPS ? 443 : 80);
+    log_line(L"Upload target host=\"%s\" port=%u secure=%s path=\"%s\"",
+        host_buf, (unsigned)port,
+        bool_to_wide(url.nScheme == INTERNET_SCHEME_HTTPS), path_buf);
+    log_line(L"Upload payload dump=%luB event=%s bc1=%s bc2=%s stowed=%s "
+             L"attachments=%Iu",
+        dump_len, bool_to_wide(have_event), bool_to_wide(have_bc1),
+        bool_to_wide(have_bc2), bool_to_wide(have_stowed_stack),
+        attachments.size());
 
     char boundary[64];
     _snprintf_s(boundary, _countof(boundary), _TRUNCATE,
@@ -800,20 +878,28 @@ upload_dump(
         HINTERNET session = sentry__wer_winhttp_open_session(user_agent, proxy);
         if (session) {
             sentry_wer_winhttp_result_t result;
-            INTERNET_PORT port = url.nPort
-                ? url.nPort
-                : (url.nScheme == INTERNET_SCHEME_HTTPS ? 443 : 80);
             if (sentry__wer_winhttp_simple_post(session, host_buf, port,
                     url.nScheme == INTERNET_SCHEME_HTTPS, path_buf, header_w,
                     (const unsigned char *)body, body_len, &result)
                 == 0) {
+                log_line(L"Upload HTTP status=%u rate_limited=%s",
+                    result.status_code, bool_to_wide(result.rate_limited));
                 ok = result.status_code >= 200 && result.status_code < 300;
+            } else {
+                log_line(L"Upload POST failed");
             }
             WinHttpCloseHandle(session);
+        } else {
+            log_line(L"WinHTTP session open failed");
         }
         sentry_free(body);
     } else {
         sentry__stringbuilder_cleanup(&sb);
+        log_line(L"Failed to build multipart upload body");
+    }
+
+    if (ok) {
+        write_uploaded_marker();
     }
 
     if (dump_data) {
@@ -884,12 +970,26 @@ out_of_process_exception_event_callback_impl(PVOID ctx,
     sentry_wer_runtime_context ctx_copy = { };
     wer_status status = WER_STATUS_OK;
 
+    log_line(L"Callback enter werfault_pid=%lu target_pid=%lu target_tid=%lu "
+             L"code=0x%08lX addr=%p",
+        GetCurrentProcessId(),
+        info && info->hProcess ? GetProcessId(info->hProcess) : 0,
+        info && info->hThread ? GetThreadId(info->hThread) : 0,
+        info ? info->exceptionRecord.ExceptionCode : 0,
+        info ? info->exceptionRecord.ExceptionAddress : nullptr);
+
     if (!read_runtime_context(info, ctx, &ctx_copy)) {
-        return status_to_hresult(WER_STATUS_CONTEXT_READ_FAIL);
+        log_line(L"Runtime context read failed remote_ctx=%p", ctx);
+        return log_and_status_to_hresult(WER_STATUS_CONTEXT_READ_FAIL);
     }
 
     g_state.run_path = ctx_copy.run_path;
     g_state.database_path = ctx_copy.database_path;
+    log_line(L"Runtime context version=%u size=%u flags=0x%08lX run=\"%s\" "
+             L"upload_url=%s consent_required=%s",
+        ctx_copy.version, ctx_copy.size, ctx_copy.flags,
+        g_state.run_path.c_str(), bool_to_wide(ctx_copy.minidump_url[0] != 0),
+        bool_to_wide((ctx_copy.flags & SENTRY_WER_FLAG_REQUIRE_CONSENT) != 0));
 
     if (claimed) {
         // Leave *claimed = FALSE so WER still shows its normal crash dialog
@@ -910,20 +1010,24 @@ out_of_process_exception_event_callback_impl(PVOID ctx,
 
     std::wstring dump_path;
     if (!write_minidump(info, &dump_path)) {
-        return status_to_hresult(WER_STATUS_DUMP_WRITE_FAIL);
+        return log_and_status_to_hresult(WER_STATUS_DUMP_WRITE_FAIL);
     }
 
     write_crash_marker();
 
+    bool has_consent = has_user_consent(&ctx_copy);
+
     if (!ctx_copy.minidump_url[0]) {
+        log_line(L"Skipping upload because minidump_url is empty");
         status = WER_STATUS_NO_MINIDUMP_URL;
-    } else if (!has_user_consent(&ctx_copy)) {
+    } else if (!has_consent) {
+        log_line(L"Skipping upload because user consent is missing");
         status = WER_STATUS_CONSENT_REQUIRED;
     } else if (!upload_dump(&ctx_copy, dump_path)) {
         status = WER_STATUS_UPLOAD_FAIL;
     }
 
-    return status_to_hresult(status);
+    return log_and_status_to_hresult(status);
 }
 
 // Top-level WER callback exported by name. WerFault.exe loads the DLL and calls
@@ -967,10 +1071,17 @@ OutOfProcessExceptionEventDebuggerLaunchCallback(PVOID,
 BOOL WINAPI
 DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved)
 {
-    (void)instance;
     (void)reserved;
-    if (reason == DLL_PROCESS_DETACH) {
-        log_line(L"DLL_PROCESS_DETACH");
+    if (reason == DLL_PROCESS_ATTACH) {
+        wchar_t module_path[MAX_PATH] = { };
+        DWORD module_len
+            = GetModuleFileNameW(instance, module_path, _countof(module_path));
+        log_line(L"DLL_PROCESS_ATTACH pid=%lu tid=%lu module=\"%s\"",
+            GetCurrentProcessId(), GetCurrentThreadId(),
+            module_len ? module_path : L"<unknown>");
+    } else if (reason == DLL_PROCESS_DETACH) {
+        log_line(L"DLL_PROCESS_DETACH pid=%lu tid=%lu", GetCurrentProcessId(),
+            GetCurrentThreadId());
     }
     return TRUE;
 }
